@@ -100,13 +100,6 @@ def _parse_and_validate_default(
         if field_name in ("runAsUser", "runAsGroup", "fsGroup", "supplementalGroups"):
             parsed: Any = int(raw)
             test_value: Any = parsed
-        elif field_name == "allowPrivilegeEscalation":
-            if raw.lower() == "true":
-                parsed, test_value = True, True
-            elif raw.lower() == "false":
-                parsed, test_value = False, False
-            else:
-                raise ValueError(f"expected 'true' or 'false', got {raw!r}")
         elif field_name == "nodeLabel":
             if "=" not in raw:
                 raise ValueError(f"expected 'key=value' format, got {raw!r}")

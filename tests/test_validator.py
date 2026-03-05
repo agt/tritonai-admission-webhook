@@ -151,39 +151,6 @@ class TestRunAsGroup:
 
 
 # ---------------------------------------------------------------------------
-# allowPrivilegeEscalation — REQUIRED_SCALAR (boolean)
-# ---------------------------------------------------------------------------
-
-
-class TestAllowPrivilegeEscalation:
-    ANNOTATIONS_FALSE = {"sc.dsmlp.ucsd.edu/allowPrivilegeEscalation": "false"}
-    ANNOTATIONS_TRUE = {"sc.dsmlp.ucsd.edu/allowPrivilegeEscalation": "true"}
-
-    def test_pod_sc_false_matches_false_annotation(self):
-        spec = _pod(pod_sc={"allowPrivilegeEscalation": False})
-        assert validate_pod(self.ANNOTATIONS_FALSE, spec).allowed is True
-
-    def test_pod_sc_true_fails_false_annotation(self):
-        spec = _pod(pod_sc={"allowPrivilegeEscalation": True})
-        result = validate_pod(self.ANNOTATIONS_FALSE, spec)
-        assert result.allowed is False
-
-    def test_container_must_set_when_pod_sc_absent(self):
-        spec = _pod(containers=[_container(sc=None)])
-        result = validate_pod(self.ANNOTATIONS_FALSE, spec)
-        assert result.allowed is False
-
-    def test_container_matches(self):
-        spec = _pod(containers=[_container(sc={"allowPrivilegeEscalation": False})])
-        assert validate_pod(self.ANNOTATIONS_FALSE, spec).allowed is True
-
-    def test_container_bad_value(self):
-        spec = _pod(containers=[_container(sc={"allowPrivilegeEscalation": True})])
-        result = validate_pod(self.ANNOTATIONS_FALSE, spec)
-        assert result.allowed is False
-
-
-# ---------------------------------------------------------------------------
 # fsGroup — OPTIONAL_SCALAR
 # ---------------------------------------------------------------------------
 
@@ -246,35 +213,19 @@ class TestMultipleConstraints:
     ANNOTATIONS = {
         "sc.dsmlp.ucsd.edu/runAsUser": "1000",
         "sc.dsmlp.ucsd.edu/runAsGroup": "2000",
-        "sc.dsmlp.ucsd.edu/allowPrivilegeEscalation": "false",
         "sc.dsmlp.ucsd.edu/fsGroup": "3000",
     }
 
     def test_all_pass(self):
         spec = _pod(
-            pod_sc={
-                "runAsUser": 1000,
-                "runAsGroup": 2000,
-                "fsGroup": 3000,
-            },
-            containers=[
-                _container(
-                    sc={
-                        "allowPrivilegeEscalation": False,
-                    }
-                )
-            ],
+            pod_sc={"runAsUser": 1000, "runAsGroup": 2000, "fsGroup": 3000},
+            containers=[_container(sc={"runAsUser": 1000, "runAsGroup": 2000})],
         )
         assert validate_pod(self.ANNOTATIONS, spec).allowed is True
 
     def test_one_fails_causes_rejection(self):
         spec = _pod(
-            pod_sc={
-                "runAsUser": 1000,
-                "runAsGroup": 9999,  # wrong
-                "fsGroup": 3000,
-            },
-            containers=[_container(sc={"allowPrivilegeEscalation": False})],
+            pod_sc={"runAsUser": 1000, "runAsGroup": 9999, "fsGroup": 3000},  # wrong group
         )
         result = validate_pod(self.ANNOTATIONS, spec)
         assert result.allowed is False
@@ -282,18 +233,12 @@ class TestMultipleConstraints:
 
     def test_multiple_failures_all_reported(self):
         spec = _pod(
-            pod_sc={
-                "runAsUser": 999,  # wrong
-                "runAsGroup": 9999,  # wrong
-            },
-            containers=[_container(sc={"allowPrivilegeEscalation": True})],  # wrong
+            pod_sc={"runAsUser": 999, "runAsGroup": 9999},  # both wrong
         )
         result = validate_pod(self.ANNOTATIONS, spec)
         assert result.allowed is False
-        # All three errors should appear
         assert "runAsUser" in result.message
         assert "runAsGroup" in result.message
-        assert "allowPrivilegeEscalation" in result.message
 
 
 # ---------------------------------------------------------------------------

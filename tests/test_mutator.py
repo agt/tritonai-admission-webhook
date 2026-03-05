@@ -207,45 +207,6 @@ class TestMutateRunAsUser:
 
 
 # ---------------------------------------------------------------------------
-# allowPrivilegeEscalation — REQUIRED_SCALAR (boolean)
-# ---------------------------------------------------------------------------
-
-
-APE_ANNOTATIONS = {
-    "sc.dsmlp.ucsd.edu/allowPrivilegeEscalation": "false",
-    "sc.dsmlp.ucsd.edu/default.allowPrivilegeEscalation": "false",
-}
-
-
-class TestMutateAllowPrivilegeEscalation:
-
-    def test_fixes_true_to_false_in_container(self):
-        spec = _pod(containers=[_container(sc={"allowPrivilegeEscalation": True})])
-        patches = mutate_pod(APE_ANNOTATIONS, spec)
-        assert len(patches) == 1
-        assert patches[0]["value"] is False
-
-    def test_creates_pod_sc_when_container_lacks_sc(self):
-        spec = _pod(containers=[_container(sc=None)])
-        patches = mutate_pod(APE_ANNOTATIONS, spec)
-        assert len(patches) == 1
-        assert patches[0]["value"] == {"allowPrivilegeEscalation": False}
-
-    def test_no_patches_when_already_false(self):
-        spec = _pod(pod_sc={"allowPrivilegeEscalation": False})
-        assert mutate_pod(APE_ANNOTATIONS, spec) == []
-
-    def test_invalid_default_skipped(self, caplog):
-        annotations = {
-            "sc.dsmlp.ucsd.edu/allowPrivilegeEscalation": "false",
-            "sc.dsmlp.ucsd.edu/default.allowPrivilegeEscalation": "maybe",
-        }
-        spec = _pod(containers=[_container(sc={"allowPrivilegeEscalation": True})])
-        assert mutate_pod(annotations, spec) == []
-        assert "cannot parse" in caplog.text.lower()
-
-
-# ---------------------------------------------------------------------------
 # fsGroup — OPTIONAL_SCALAR
 # ---------------------------------------------------------------------------
 
@@ -420,8 +381,6 @@ class TestMultipleConstraintMutations:
             "sc.dsmlp.ucsd.edu/default.runAsUser": "1000",
             "sc.dsmlp.ucsd.edu/runAsGroup": "2000",
             "sc.dsmlp.ucsd.edu/default.runAsGroup": "2000",
-            "sc.dsmlp.ucsd.edu/allowPrivilegeEscalation": "false",
-            "sc.dsmlp.ucsd.edu/default.allowPrivilegeEscalation": "false",
             "sc.dsmlp.ucsd.edu/nodeLabel": "partition=gpu",
             "sc.dsmlp.ucsd.edu/default.nodeLabel": "partition=gpu",
         }
@@ -432,8 +391,7 @@ class TestMultipleConstraintMutations:
         patches = mutate_pod(annotations, spec)
         paths = {p["path"] for p in patches}
 
-        # Should create pod SC covering runAsUser, runAsGroup, allowPrivilegeEscalation
-        # (first field creates SC, subsequent ones add to it)
+        # Should create pod SC covering runAsUser, runAsGroup
         assert any("/spec/securityContext" in path for path in paths)
         # nodeName removed
         assert "/spec/nodeName" in paths

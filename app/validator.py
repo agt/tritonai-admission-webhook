@@ -7,7 +7,6 @@ Validation rules per annotation
 ────────────────────────────────
 sc.dsmlp.ucsd.edu/runAsUser          →  REQUIRED_SCALAR  (see below)
 sc.dsmlp.ucsd.edu/runAsGroup         →  REQUIRED_SCALAR
-sc.dsmlp.ucsd.edu/allowPrivilegeEscalation  →  REQUIRED_SCALAR
 
 sc.dsmlp.ucsd.edu/fsGroup            →  OPTIONAL_SCALAR  (pod-level only in k8s)
 sc.dsmlp.ucsd.edu/supplementalGroups →  OPTIONAL_LIST    (pod-level only in k8s)
@@ -112,11 +111,6 @@ _FIELD_SPECS: dict[str, FieldSpec] = {
         display_name="runAsGroup",
         behavior=FieldBehavior.REQUIRED_SCALAR,
         extract=lambda sc: sc.get("runAsGroup"),
-    ),
-    "allowPrivilegeEscalation": FieldSpec(
-        display_name="allowPrivilegeEscalation",
-        behavior=FieldBehavior.REQUIRED_SCALAR,
-        extract=lambda sc: sc.get("allowPrivilegeEscalation"),
     ),
     "fsGroup": FieldSpec(
         display_name="fsGroup",
