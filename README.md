@@ -32,7 +32,6 @@ metadata:
     sc.dsmlp.ucsd.edu/runAsGroup: "1000"
     sc.dsmlp.ucsd.edu/fsGroup: "1000"
     sc.dsmlp.ucsd.edu/supplementalGroups: "1000,2000-3000"
-    sc.dsmlp.ucsd.edu/allowPrivilegeEscalation: "false"
     sc.dsmlp.ucsd.edu/nodeLabel: "partition=gpu,partition=cpu"
 ```
 
@@ -70,7 +69,7 @@ sc.dsmlp.ucsd.edu/nodeLabel: "rack=b,rack=c"
 
 ## Validation Behavior per Annotation
 
-### `sc.dsmlp.ucsd.edu/runAsUser`, `sc.dsmlp.ucsd.edu/runAsGroup`, `sc.dsmlp.ucsd.edu/allowPrivilegeEscalation`
+### `sc.dsmlp.ucsd.edu/runAsUser`, `sc.dsmlp.ucsd.edu/runAsGroup`
 
 **Required field** — enforcement is strict:
 
