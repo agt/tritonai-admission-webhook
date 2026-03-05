@@ -13,6 +13,7 @@ def _pod(
     pod_sc: dict | None = None,
     containers: list[dict] | None = None,
     init_containers: list[dict] | None = None,
+    ephemeral_containers: list[dict] | None = None,
 ) -> dict:
     spec: dict = {}
     if pod_sc is not None:
@@ -20,6 +21,8 @@ def _pod(
     spec["containers"] = containers or [{"name": "app"}]
     if init_containers:
         spec["initContainers"] = init_containers
+    if ephemeral_containers:
+        spec["ephemeralContainers"] = ephemeral_containers
     return spec
 
 
@@ -108,6 +111,25 @@ class TestRunAsUser:
         assert result.allowed is False
         assert "init" in result.message
 
+    def test_ephemeral_container_also_validated(self):
+        spec = _pod(
+            pod_sc=None,
+            containers=[_container(sc={"runAsUser": 1000})],
+            ephemeral_containers=[_container("debug", sc={"runAsUser": 999})],
+        )
+        result = validate_pod(self.ANNOTATIONS, spec)
+        assert result.allowed is False
+        assert "debug" in result.message
+
+    def test_no_pod_sc_ephemeral_container_missing_field(self):
+        """Ephemeral container without runAsUser and no pod-level SC → rejected."""
+        spec = _pod(
+            containers=[_container(sc={"runAsUser": 1000})],
+            ephemeral_containers=[_container("debug", sc=None)],
+        )
+        result = validate_pod(self.ANNOTATIONS, spec)
+        assert result.allowed is False
+
     def test_range_constraint(self):
         annotations = {"sc.dsmlp.ucsd.edu/runAsUser": "1000,2000-3000"}
         spec = _pod(containers=[_container(sc={"runAsUser": 2500})])
@@ -148,39 +170,6 @@ class TestRunAsGroup:
     def test_container_with_correct_group(self):
         spec = _pod(containers=[_container(sc={"runAsGroup": 2000})])
         assert validate_pod(self.ANNOTATIONS, spec).allowed is True
-
-
-# ---------------------------------------------------------------------------
-# allowPrivilegeEscalation — REQUIRED_SCALAR (boolean)
-# ---------------------------------------------------------------------------
-
-
-class TestAllowPrivilegeEscalation:
-    ANNOTATIONS_FALSE = {"sc.dsmlp.ucsd.edu/allowPrivilegeEscalation": "false"}
-    ANNOTATIONS_TRUE = {"sc.dsmlp.ucsd.edu/allowPrivilegeEscalation": "true"}
-
-    def test_pod_sc_false_matches_false_annotation(self):
-        spec = _pod(pod_sc={"allowPrivilegeEscalation": False})
-        assert validate_pod(self.ANNOTATIONS_FALSE, spec).allowed is True
-
-    def test_pod_sc_true_fails_false_annotation(self):
-        spec = _pod(pod_sc={"allowPrivilegeEscalation": True})
-        result = validate_pod(self.ANNOTATIONS_FALSE, spec)
-        assert result.allowed is False
-
-    def test_container_must_set_when_pod_sc_absent(self):
-        spec = _pod(containers=[_container(sc=None)])
-        result = validate_pod(self.ANNOTATIONS_FALSE, spec)
-        assert result.allowed is False
-
-    def test_container_matches(self):
-        spec = _pod(containers=[_container(sc={"allowPrivilegeEscalation": False})])
-        assert validate_pod(self.ANNOTATIONS_FALSE, spec).allowed is True
-
-    def test_container_bad_value(self):
-        spec = _pod(containers=[_container(sc={"allowPrivilegeEscalation": True})])
-        result = validate_pod(self.ANNOTATIONS_FALSE, spec)
-        assert result.allowed is False
 
 
 # ---------------------------------------------------------------------------
@@ -246,35 +235,19 @@ class TestMultipleConstraints:
     ANNOTATIONS = {
         "sc.dsmlp.ucsd.edu/runAsUser": "1000",
         "sc.dsmlp.ucsd.edu/runAsGroup": "2000",
-        "sc.dsmlp.ucsd.edu/allowPrivilegeEscalation": "false",
         "sc.dsmlp.ucsd.edu/fsGroup": "3000",
     }
 
     def test_all_pass(self):
         spec = _pod(
-            pod_sc={
-                "runAsUser": 1000,
-                "runAsGroup": 2000,
-                "fsGroup": 3000,
-            },
-            containers=[
-                _container(
-                    sc={
-                        "allowPrivilegeEscalation": False,
-                    }
-                )
-            ],
+            pod_sc={"runAsUser": 1000, "runAsGroup": 2000, "fsGroup": 3000},
+            containers=[_container(sc={"runAsUser": 1000, "runAsGroup": 2000})],
         )
         assert validate_pod(self.ANNOTATIONS, spec).allowed is True
 
     def test_one_fails_causes_rejection(self):
         spec = _pod(
-            pod_sc={
-                "runAsUser": 1000,
-                "runAsGroup": 9999,  # wrong
-                "fsGroup": 3000,
-            },
-            containers=[_container(sc={"allowPrivilegeEscalation": False})],
+            pod_sc={"runAsUser": 1000, "runAsGroup": 9999, "fsGroup": 3000},  # wrong group
         )
         result = validate_pod(self.ANNOTATIONS, spec)
         assert result.allowed is False
@@ -282,18 +255,12 @@ class TestMultipleConstraints:
 
     def test_multiple_failures_all_reported(self):
         spec = _pod(
-            pod_sc={
-                "runAsUser": 999,  # wrong
-                "runAsGroup": 9999,  # wrong
-            },
-            containers=[_container(sc={"allowPrivilegeEscalation": True})],  # wrong
+            pod_sc={"runAsUser": 999, "runAsGroup": 9999},  # both wrong
         )
         result = validate_pod(self.ANNOTATIONS, spec)
         assert result.allowed is False
-        # All three errors should appear
         assert "runAsUser" in result.message
         assert "runAsGroup" in result.message
-        assert "allowPrivilegeEscalation" in result.message
 
 
 # ---------------------------------------------------------------------------
@@ -330,6 +297,16 @@ class TestEdgeCases:
         result = validate_pod(annotations, spec)
         assert result.allowed is False
         assert "c2" in result.message
+
+    def test_ephemeral_container_must_also_pass(self):
+        annotations = {"sc.dsmlp.ucsd.edu/runAsUser": "1000"}
+        spec = _pod(
+            containers=[_container("c1", sc={"runAsUser": 1000})],
+            ephemeral_containers=[_container("e1", sc={"runAsUser": 999})],  # bad
+        )
+        result = validate_pod(annotations, spec)
+        assert result.allowed is False
+        assert "e1" in result.message
 
 
 # ---------------------------------------------------------------------------
@@ -426,3 +403,149 @@ class TestNodeLabel:
         result = validate_pod(annotations, spec)
         assert result.allowed is False
         assert "malformed" in result.message.lower()
+
+
+# ---------------------------------------------------------------------------
+# Hardcoded security constraints (always enforced)
+# ---------------------------------------------------------------------------
+
+# Minimal valid annotations so annotation-based checks pass; we focus on the
+# hardcoded constraints in this class.
+_ALWAYS_ANNOTATIONS = {"sc.dsmlp.ucsd.edu/runAsUser": "1000"}
+_ALWAYS_SPEC_OK = _pod(containers=[_container(sc={"runAsUser": 1000})])
+
+
+class TestHardcodedConstraints:
+
+    # ------------------------------------------------------------------ #
+    # Baseline: a clean pod passes
+    # ------------------------------------------------------------------ #
+
+    def test_clean_pod_allowed(self):
+        assert validate_pod(_ALWAYS_ANNOTATIONS, _ALWAYS_SPEC_OK).allowed is True
+
+    # ------------------------------------------------------------------ #
+    # allowPrivilegeEscalation
+    # ------------------------------------------------------------------ #
+
+    def test_allow_privilege_escalation_false_ok(self):
+        spec = _pod(containers=[_container(sc={"runAsUser": 1000, "allowPrivilegeEscalation": False})])
+        assert validate_pod(_ALWAYS_ANNOTATIONS, spec).allowed is True
+
+    def test_allow_privilege_escalation_absent_ok(self):
+        spec = _pod(containers=[_container(sc={"runAsUser": 1000})])
+        assert validate_pod(_ALWAYS_ANNOTATIONS, spec).allowed is True
+
+    def test_allow_privilege_escalation_true_rejected(self):
+        spec = _pod(containers=[_container(sc={"runAsUser": 1000, "allowPrivilegeEscalation": True})])
+        result = validate_pod(_ALWAYS_ANNOTATIONS, spec)
+        assert result.allowed is False
+        assert "allowPrivilegeEscalation" in result.message
+
+    # ------------------------------------------------------------------ #
+    # privileged
+    # ------------------------------------------------------------------ #
+
+    def test_privileged_false_ok(self):
+        spec = _pod(containers=[_container(sc={"runAsUser": 1000, "privileged": False})])
+        assert validate_pod(_ALWAYS_ANNOTATIONS, spec).allowed is True
+
+    def test_privileged_absent_ok(self):
+        spec = _pod(containers=[_container(sc={"runAsUser": 1000})])
+        assert validate_pod(_ALWAYS_ANNOTATIONS, spec).allowed is True
+
+    def test_privileged_true_rejected(self):
+        spec = _pod(containers=[_container(sc={"runAsUser": 1000, "privileged": True})])
+        result = validate_pod(_ALWAYS_ANNOTATIONS, spec)
+        assert result.allowed is False
+        assert "privileged" in result.message
+
+    # ------------------------------------------------------------------ #
+    # capabilities.add
+    # ------------------------------------------------------------------ #
+
+    def test_capabilities_add_absent_ok(self):
+        spec = _pod(containers=[_container(sc={"runAsUser": 1000})])
+        assert validate_pod(_ALWAYS_ANNOTATIONS, spec).allowed is True
+
+    def test_capabilities_add_empty_ok(self):
+        spec = _pod(containers=[_container(sc={"runAsUser": 1000, "capabilities": {"add": []}})])
+        assert validate_pod(_ALWAYS_ANNOTATIONS, spec).allowed is True
+
+    def test_capabilities_add_net_bind_service_ok(self):
+        spec = _pod(containers=[_container(sc={"runAsUser": 1000, "capabilities": {"add": ["NET_BIND_SERVICE"]}})])
+        assert validate_pod(_ALWAYS_ANNOTATIONS, spec).allowed is True
+
+    def test_capabilities_add_disallowed_rejected(self):
+        spec = _pod(containers=[_container(sc={"runAsUser": 1000, "capabilities": {"add": ["SYS_ADMIN"]}})])
+        result = validate_pod(_ALWAYS_ANNOTATIONS, spec)
+        assert result.allowed is False
+        assert "capabilities" in result.message
+
+    def test_capabilities_add_mixed_rejected(self):
+        """NET_BIND_SERVICE alongside a disallowed capability → rejected."""
+        spec = _pod(containers=[_container(sc={"runAsUser": 1000, "capabilities": {"add": ["NET_BIND_SERVICE", "SYS_PTRACE"]}})])
+        result = validate_pod(_ALWAYS_ANNOTATIONS, spec)
+        assert result.allowed is False
+
+    # ------------------------------------------------------------------ #
+    # procMount
+    # ------------------------------------------------------------------ #
+
+    def test_proc_mount_absent_ok(self):
+        spec = _pod(containers=[_container(sc={"runAsUser": 1000})])
+        assert validate_pod(_ALWAYS_ANNOTATIONS, spec).allowed is True
+
+    def test_proc_mount_default_ok(self):
+        spec = _pod(containers=[_container(sc={"runAsUser": 1000, "procMount": "Default"})])
+        assert validate_pod(_ALWAYS_ANNOTATIONS, spec).allowed is True
+
+    def test_proc_mount_empty_string_ok(self):
+        spec = _pod(containers=[_container(sc={"runAsUser": 1000, "procMount": ""})])
+        assert validate_pod(_ALWAYS_ANNOTATIONS, spec).allowed is True
+
+    def test_proc_mount_unmasked_rejected(self):
+        spec = _pod(containers=[_container(sc={"runAsUser": 1000, "procMount": "Unmasked"})])
+        result = validate_pod(_ALWAYS_ANNOTATIONS, spec)
+        assert result.allowed is False
+        assert "procMount" in result.message
+
+    # ------------------------------------------------------------------ #
+    # sysctls (pod-level)
+    # ------------------------------------------------------------------ #
+
+    def test_sysctls_absent_ok(self):
+        spec = _pod(pod_sc={"runAsUser": 1000})
+        assert validate_pod(_ALWAYS_ANNOTATIONS, spec).allowed is True
+
+    def test_sysctls_empty_ok(self):
+        spec = _pod(pod_sc={"runAsUser": 1000, "sysctls": []})
+        assert validate_pod(_ALWAYS_ANNOTATIONS, spec).allowed is True
+
+    def test_sysctls_nonempty_rejected(self):
+        spec = _pod(pod_sc={"runAsUser": 1000, "sysctls": [{"name": "net.ipv4.tcp_syncookies", "value": "1"}]})
+        result = validate_pod(_ALWAYS_ANNOTATIONS, spec)
+        assert result.allowed is False
+        assert "sysctls" in result.message
+
+    # ------------------------------------------------------------------ #
+    # Applies to initContainers and ephemeralContainers too
+    # ------------------------------------------------------------------ #
+
+    def test_init_container_privileged_rejected(self):
+        spec = _pod(
+            containers=[_container(sc={"runAsUser": 1000})],
+            init_containers=[_container("init", sc={"runAsUser": 1000, "privileged": True})],
+        )
+        result = validate_pod(_ALWAYS_ANNOTATIONS, spec)
+        assert result.allowed is False
+        assert "init" in result.message
+
+    def test_ephemeral_container_allow_privilege_escalation_rejected(self):
+        spec = _pod(
+            containers=[_container(sc={"runAsUser": 1000})],
+            ephemeral_containers=[_container("debug", sc={"runAsUser": 1000, "allowPrivilegeEscalation": True})],
+        )
+        result = validate_pod(_ALWAYS_ANNOTATIONS, spec)
+        assert result.allowed is False
+        assert "debug" in result.message

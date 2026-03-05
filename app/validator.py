@@ -7,7 +7,6 @@ Validation rules per annotation
 ────────────────────────────────
 sc.dsmlp.ucsd.edu/runAsUser          →  REQUIRED_SCALAR  (see below)
 sc.dsmlp.ucsd.edu/runAsGroup         →  REQUIRED_SCALAR
-sc.dsmlp.ucsd.edu/allowPrivilegeEscalation  →  REQUIRED_SCALAR
 
 sc.dsmlp.ucsd.edu/fsGroup            →  OPTIONAL_SCALAR  (pod-level only in k8s)
 sc.dsmlp.ucsd.edu/supplementalGroups →  OPTIONAL_LIST    (pod-level only in k8s)
@@ -50,16 +49,12 @@ def _pod_sc(pod_spec: dict[str, Any]) -> dict[str, Any]:
     return pod_spec.get("securityContext") or {}
 
 
-def _containers(pod_spec: dict[str, Any]) -> list[dict[str, Any]]:
-    return list(pod_spec.get("containers") or [])
-
-
-def _init_containers(pod_spec: dict[str, Any]) -> list[dict[str, Any]]:
-    return list(pod_spec.get("initContainers") or [])
-
-
 def _all_containers(pod_spec: dict[str, Any]) -> list[dict[str, Any]]:
-    return _containers(pod_spec) + _init_containers(pod_spec)
+    return (
+        list(pod_spec.get("containers") or [])
+        + list(pod_spec.get("initContainers") or [])
+        + list(pod_spec.get("ephemeralContainers") or [])
+    )
 
 
 def _container_sc(container: dict[str, Any]) -> dict[str, Any]:
@@ -112,11 +107,6 @@ _FIELD_SPECS: dict[str, FieldSpec] = {
         display_name="runAsGroup",
         behavior=FieldBehavior.REQUIRED_SCALAR,
         extract=lambda sc: sc.get("runAsGroup"),
-    ),
-    "allowPrivilegeEscalation": FieldSpec(
-        display_name="allowPrivilegeEscalation",
-        behavior=FieldBehavior.REQUIRED_SCALAR,
-        extract=lambda sc: sc.get("allowPrivilegeEscalation"),
     ),
     "fsGroup": FieldSpec(
         display_name="fsGroup",
@@ -276,6 +266,72 @@ _BEHAVIOR_HANDLERS: dict[
 
 
 # ---------------------------------------------------------------------------
+# Hardcoded security constraints (always enforced, not annotation-driven)
+# ---------------------------------------------------------------------------
+
+_ALLOWED_CAPABILITIES: frozenset[str] = frozenset({"NET_BIND_SERVICE"})
+
+
+def _validate_hardcoded_constraints(pod_spec: dict[str, Any]) -> list[str]:
+    """Enforce security constraints that apply to every pod, regardless of namespace annotations.
+
+    Pod-level:
+      - securityContext.sysctls must be absent or empty.
+
+    Per container (containers, initContainers, ephemeralContainers):
+      - securityContext.allowPrivilegeEscalation must be absent or false.
+      - securityContext.privileged must be absent or false.
+      - securityContext.capabilities.add must be absent, empty, or contain only NET_BIND_SERVICE.
+      - securityContext.procMount must be absent, empty string, or "Default".
+    """
+    errors: list[str] = []
+
+    # Pod-level: sysctls
+    pod_sc = _pod_sc(pod_spec)
+    sysctls = pod_sc.get("sysctls")
+    if sysctls:  # non-None and non-empty list
+        errors.append(
+            f"Pod securityContext.sysctls must be absent or empty; found {sysctls!r}"
+        )
+
+    # Container-level checks
+    for container in _all_containers(pod_spec):
+        cname = _container_name(container)
+        csc = _container_sc(container)
+
+        ape = csc.get("allowPrivilegeEscalation")
+        if ape is not None and ape is not False:
+            errors.append(
+                f"Container {cname!r} securityContext.allowPrivilegeEscalation must be "
+                f"absent or false; found {ape!r}"
+            )
+
+        privileged = csc.get("privileged")
+        if privileged is not None and privileged is not False:
+            errors.append(
+                f"Container {cname!r} securityContext.privileged must be absent or false; "
+                f"found {privileged!r}"
+            )
+
+        caps_add = (csc.get("capabilities") or {}).get("add") or []
+        disallowed = [c for c in caps_add if c not in _ALLOWED_CAPABILITIES]
+        if disallowed:
+            errors.append(
+                f"Container {cname!r} securityContext.capabilities.add contains disallowed "
+                f"capabilities {disallowed!r}; only NET_BIND_SERVICE is permitted"
+            )
+
+        proc_mount = csc.get("procMount")
+        if proc_mount is not None and proc_mount not in ("", "Default"):
+            errors.append(
+                f"Container {cname!r} securityContext.procMount must be absent or 'Default'; "
+                f"found {proc_mount!r}"
+            )
+
+    return errors
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -350,5 +406,8 @@ def validate_pod(
         handler = _BEHAVIOR_HANDLERS[spec.behavior]
         field_errors = handler(field_suffix, spec, pod_spec, constraint_set)
         all_errors.extend(field_errors)
+
+    # Apply hardcoded constraints (always enforced)
+    all_errors.extend(_validate_hardcoded_constraints(pod_spec))
 
     return ValidationResult(allowed=len(all_errors) == 0, errors=all_errors)
