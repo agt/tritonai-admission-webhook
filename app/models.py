@@ -56,6 +56,8 @@ class StatusDetails(BaseModel):
 class AdmissionResponse(BaseModel):
     uid: str
     allowed: bool
+    patchType: str | None = None   # "JSONPatch" when patches are present
+    patch: str | None = None       # base64-encoded RFC 6902 JSON Patch array
     status: StatusDetails | None = None
 
 
