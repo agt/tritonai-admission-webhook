@@ -21,6 +21,7 @@ def _pod(
     pod_sc: dict | None = None,
     containers: list[dict] | None = None,
     init_containers: list[dict] | None = None,
+    ephemeral_containers: list[dict] | None = None,
 ) -> dict:
     spec: dict = {}
     if pod_sc is not None:
@@ -28,6 +29,8 @@ def _pod(
     spec["containers"] = containers or [{"name": "app"}]
     if init_containers:
         spec["initContainers"] = init_containers
+    if ephemeral_containers:
+        spec["ephemeralContainers"] = ephemeral_containers
     return spec
 
 
@@ -187,6 +190,27 @@ class TestMutateRunAsUser:
         patches = mutate_pod(RUNASUSER_ANNOTATIONS, spec)
         assert len(patches) == 1
         assert "initContainers/0" in patches[0]["path"]
+
+    def test_fixes_ephemeral_container(self):
+        spec = _pod(
+            containers=[_container(sc={"runAsUser": 1000})],
+            ephemeral_containers=[_container("debug", sc={"runAsUser": 999})],
+        )
+        patches = mutate_pod(RUNASUSER_ANNOTATIONS, spec)
+        assert len(patches) == 1
+        assert "ephemeralContainers/0" in patches[0]["path"]
+
+    def test_creates_pod_sc_when_only_ephemeral_container_missing_field(self):
+        """No pod SC; ephemeral container has no securityContext → pod SC created."""
+        spec = _pod(
+            containers=[_container(sc={"runAsUser": 1000})],
+            ephemeral_containers=[_container("debug", sc=None)],
+        )
+        patches = mutate_pod(RUNASUSER_ANNOTATIONS, spec)
+        # Pod SC must be created to cover the ephemeral container
+        paths = [p["path"] for p in patches]
+        assert any("securityContext" in path and "ephemeral" not in path and "containers" not in path
+                   for path in paths)
 
     def test_range_default_applied(self):
         annotations = {

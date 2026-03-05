@@ -49,16 +49,12 @@ def _pod_sc(pod_spec: dict[str, Any]) -> dict[str, Any]:
     return pod_spec.get("securityContext") or {}
 
 
-def _containers(pod_spec: dict[str, Any]) -> list[dict[str, Any]]:
-    return list(pod_spec.get("containers") or [])
-
-
-def _init_containers(pod_spec: dict[str, Any]) -> list[dict[str, Any]]:
-    return list(pod_spec.get("initContainers") or [])
-
-
 def _all_containers(pod_spec: dict[str, Any]) -> list[dict[str, Any]]:
-    return _containers(pod_spec) + _init_containers(pod_spec)
+    return (
+        list(pod_spec.get("containers") or [])
+        + list(pod_spec.get("initContainers") or [])
+        + list(pod_spec.get("ephemeralContainers") or [])
+    )
 
 
 def _container_sc(container: dict[str, Any]) -> dict[str, Any]:

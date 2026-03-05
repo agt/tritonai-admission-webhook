@@ -133,10 +133,13 @@ def _parse_and_validate_default(
 # ---------------------------------------------------------------------------
 
 
+_CONTAINER_KINDS = ("containers", "initContainers", "ephemeralContainers")
+
+
 def _any_container_missing_field(pod: dict[str, Any], field_name: str) -> bool:
-    """Return True if any container or initContainer is missing *field_name*
-    in its securityContext (or has no securityContext at all)."""
-    for kind in ("containers", "initContainers"):
+    """Return True if any container, initContainer, or ephemeralContainer is
+    missing *field_name* in its securityContext (or has no securityContext)."""
+    for kind in _CONTAINER_KINDS:
         for container in pod.get(kind) or []:
             sc = container.get("securityContext")
             if sc is None or field_name not in sc:
@@ -163,7 +166,7 @@ def _mutate_required_scalar(
              does not set it itself; create the pod-level SC if necessary.
     """
     # Step 1: fix container-level overrides with wrong values
-    for kind in ("containers", "initContainers"):
+    for kind in _CONTAINER_KINDS:
         for i, container in enumerate(pod.get(kind) or []):
             sc = container.get("securityContext")
             if sc is None:

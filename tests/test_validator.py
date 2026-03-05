@@ -13,6 +13,7 @@ def _pod(
     pod_sc: dict | None = None,
     containers: list[dict] | None = None,
     init_containers: list[dict] | None = None,
+    ephemeral_containers: list[dict] | None = None,
 ) -> dict:
     spec: dict = {}
     if pod_sc is not None:
@@ -20,6 +21,8 @@ def _pod(
     spec["containers"] = containers or [{"name": "app"}]
     if init_containers:
         spec["initContainers"] = init_containers
+    if ephemeral_containers:
+        spec["ephemeralContainers"] = ephemeral_containers
     return spec
 
 
@@ -107,6 +110,25 @@ class TestRunAsUser:
         result = validate_pod(self.ANNOTATIONS, spec)
         assert result.allowed is False
         assert "init" in result.message
+
+    def test_ephemeral_container_also_validated(self):
+        spec = _pod(
+            pod_sc=None,
+            containers=[_container(sc={"runAsUser": 1000})],
+            ephemeral_containers=[_container("debug", sc={"runAsUser": 999})],
+        )
+        result = validate_pod(self.ANNOTATIONS, spec)
+        assert result.allowed is False
+        assert "debug" in result.message
+
+    def test_no_pod_sc_ephemeral_container_missing_field(self):
+        """Ephemeral container without runAsUser and no pod-level SC → rejected."""
+        spec = _pod(
+            containers=[_container(sc={"runAsUser": 1000})],
+            ephemeral_containers=[_container("debug", sc=None)],
+        )
+        result = validate_pod(self.ANNOTATIONS, spec)
+        assert result.allowed is False
 
     def test_range_constraint(self):
         annotations = {"sc.dsmlp.ucsd.edu/runAsUser": "1000,2000-3000"}
@@ -275,6 +297,16 @@ class TestEdgeCases:
         result = validate_pod(annotations, spec)
         assert result.allowed is False
         assert "c2" in result.message
+
+    def test_ephemeral_container_must_also_pass(self):
+        annotations = {"sc.dsmlp.ucsd.edu/runAsUser": "1000"}
+        spec = _pod(
+            containers=[_container("c1", sc={"runAsUser": 1000})],
+            ephemeral_containers=[_container("e1", sc={"runAsUser": 999})],  # bad
+        )
+        result = validate_pod(annotations, spec)
+        assert result.allowed is False
+        assert "e1" in result.message
 
 
 # ---------------------------------------------------------------------------
