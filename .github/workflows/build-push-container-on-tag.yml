@@ -1,6 +1,7 @@
 name: Build and Push FastAPI Image on Tag
 
 on:
+  workflow_dispatch:
   push:
     tags:
       - "*"
