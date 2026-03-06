@@ -246,14 +246,13 @@ async def _parse_admission_review(request: Request) -> AdmissionReview:
 async def mutate(request: Request) -> Response:
     """MutatingAdmissionWebhook endpoint.
 
-    Attempts to patch the pod spec (or workload pod template) toward compliance
-    using the namespace's ``sc.dsmlp.ucsd.edu/default.*`` annotations.  Always
-    returns ``allowed: true``; non-compliant resources that could not be fully
-    remediated are left for the ValidatingAdmissionWebhook to reject.
+    Only patches **Pod** resources.  All other resource kinds (including
+    Deployment, Job, CronJob, etc.) are passed through unmodified.  The
+    validating webhook handles workload template validation internally by
+    calling the mutator itself before running policy checks.
 
-    Handles Pod resources directly and also mutates the pod templates embedded
-    in Deployment, ReplicaSet, StatefulSet, DaemonSet, Job, and CronJob objects.
-    For workloads the patch paths are rewritten to target the template spec.
+    Always returns ``allowed: true``; non-compliant pods that could not be
+    fully remediated are left for the ValidatingAdmissionWebhook to reject.
     """
     review = await _parse_admission_review(request)
 
@@ -262,22 +261,14 @@ async def mutate(request: Request) -> Response:
 
     req = review.request
     uid = req.uid
-    kind = req.kind.kind
 
-    template_path = _WORKLOAD_TEMPLATE_PATHS.get(kind)
-    is_pod = kind == "Pod"
-
-    # Pass unsupported resource kinds through without modification
-    if not is_pod and template_path is None:
+    # Only patch Pod resources; pass everything else through unmodified
+    if req.kind.kind != "Pod":
         return _json_response(_allow(uid))
 
     namespace = req.namespace
     obj = req.object or {}
-
-    if is_pod:
-        pod_spec: dict[str, Any] = obj.get("spec") or {}
-    else:
-        pod_spec = _get_template_spec(obj, template_path) or {}  # type: ignore[arg-type]
+    pod_spec: dict[str, Any] = obj.get("spec") or {}
 
     if not namespace or not pod_spec:
         # Nothing useful to mutate; validator will handle rejection if needed
@@ -286,18 +277,10 @@ async def mutate(request: Request) -> Response:
     ns_annotations = get_namespace_security_annotations(namespace)
     patches = mutate_pod(ns_annotations, pod_spec)
 
-    if not is_pod and patches:
-        # Rewrite patch paths from /spec/... to the workload template spec path
-        patches = _rewrite_patch_paths(patches, _template_spec_pointer(template_path))  # type: ignore[arg-type]
-
     if patches:
         logger.info(
-            "Mutating %s uid=%s in namespace=%s: %d patch operation(s)",
-            kind, uid, namespace, len(patches),
-        )
-        logger.debug(
-            "Mutating pod uid=%s in namespace=%s: %d patch operation(s): %s",
-            uid, namespace, len(patches),str(patches),
+            "Mutating pod uid=%s in namespace=%s: %d patch operation(s)",
+            uid, namespace, len(patches),
         )
         return _json_response(_allow_with_patches(uid, patches))
 

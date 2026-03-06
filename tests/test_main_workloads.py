@@ -296,35 +296,30 @@ class TestValidateWorkloads:
 
 
 # ---------------------------------------------------------------------------
-# /mutate — workload kinds
+# /mutate — workload kinds (all passed through; only Pod is patched)
 # ---------------------------------------------------------------------------
 
 
 class TestMutateWorkloads:
-    def test_deployment_receives_rewritten_patches(self):
-        """Patches for a Deployment are rewritten to target spec.template.spec."""
+    @pytest.mark.parametrize(
+        "kind", ["Deployment", "ReplicaSet", "StatefulSet", "DaemonSet", "Job"]
+    )
+    def test_workload_kinds_passed_through_unmodified(self, kind):
+        """The mutating webhook does not patch workload resources."""
         annotations = {
             "sc.dsmlp.ucsd.edu/runAsUser": "1000",
             "sc.dsmlp.ucsd.edu/default.runAsUser": "1000",
         }
-        # Container missing runAsUser → mutator should inject default
-        pod_spec = {
-            "containers": [{"name": "app"}]  # no securityContext at all
-        }
+        pod_spec = {"containers": [{"name": "app"}]}
         with patch("app.main.get_namespace_security_annotations", return_value=annotations):
-            body = _workload_review("Deployment", pod_spec=pod_spec)
+            body = _workload_review(kind, pod_spec=pod_spec)
             resp = client.post("/mutate", json=body)
         assert resp.status_code == 200
         data = resp.json()
         assert data["response"]["allowed"] is True
-        patches = _decode_patches(data)
-        assert len(patches) > 0
-        for p in patches:
-            assert p["path"].startswith("/spec/template/spec/"), (
-                f"Expected path under /spec/template/spec/, got {p['path']!r}"
-            )
+        assert "patch" not in data["response"]
 
-    def test_cronjob_receives_rewritten_patches(self):
+    def test_cronjob_passed_through_unmodified(self):
         annotations = {
             "sc.dsmlp.ucsd.edu/runAsUser": "1000",
             "sc.dsmlp.ucsd.edu/default.runAsUser": "1000",
@@ -336,33 +331,9 @@ class TestMutateWorkloads:
         assert resp.status_code == 200
         data = resp.json()
         assert data["response"]["allowed"] is True
-        patches = _decode_patches(data)
-        assert len(patches) > 0
-        for p in patches:
-            assert p["path"].startswith("/spec/jobTemplate/spec/template/spec/"), (
-                f"Expected path under /spec/jobTemplate/spec/template/spec/, got {p['path']!r}"
-            )
-
-    @pytest.mark.parametrize("kind", ["Deployment", "ReplicaSet", "StatefulSet", "DaemonSet", "Job"])
-    def test_no_patches_when_spec_already_correct(self, kind):
-        annotations = {
-            "sc.dsmlp.ucsd.edu/runAsUser": "1000",
-            "sc.dsmlp.ucsd.edu/default.runAsUser": "1000",
-        }
-        # All containers already have runAsUser set
-        pod_spec = {
-            "containers": [{"name": "app", "securityContext": {"runAsUser": 1000}}]
-        }
-        with patch("app.main.get_namespace_security_annotations", return_value=annotations):
-            body = _workload_review(kind, pod_spec=pod_spec)
-            resp = client.post("/mutate", json=body)
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["response"]["allowed"] is True
-        # No patch should be present
         assert "patch" not in data["response"]
 
-    def test_unsupported_kind_passes_through_mutate(self):
+    def test_unsupported_kind_passed_through(self):
         body = {
             "apiVersion": "admission.k8s.io/v1",
             "kind": "AdmissionReview",
@@ -380,48 +351,7 @@ class TestMutateWorkloads:
         assert data["response"]["allowed"] is True
         assert "patch" not in data["response"]
 
-    def test_deployment_nodeselector_patch_rewritten(self):
-        annotations = {
-            "sc.dsmlp.ucsd.edu/nodeLabel": "partition=gpu",
-            "sc.dsmlp.ucsd.edu/default.nodeLabel": "partition=gpu",
-        }
-        pod_spec = {"containers": [{"name": "app"}]}
-        with patch("app.main.get_namespace_security_annotations", return_value=annotations):
-            body = _workload_review("Deployment", pod_spec=pod_spec)
-            resp = client.post("/mutate", json=body)
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["response"]["allowed"] is True
-        patches = _decode_patches(data)
-        node_selector_patch = next(
-            (p for p in patches if "nodeSelector" in p["path"]), None
-        )
-        assert node_selector_patch is not None
-        assert node_selector_patch["path"] == "/spec/template/spec/nodeSelector"
-        assert node_selector_patch["value"] == {"partition": "gpu"}
-
-    def test_deployment_missing_template_spec_no_patch(self):
-        body = {
-            "apiVersion": "admission.k8s.io/v1",
-            "kind": "AdmissionReview",
-            "request": {
-                "uid": "u1",
-                "kind": {"group": "apps", "version": "v1", "kind": "Deployment"},
-                "namespace": "ns1",
-                "operation": "CREATE",
-                "object": {"spec": {}},
-            },
-        }
+    def test_response_uid_echoed_for_workload(self):
+        body = _workload_review("Job", uid="my-job-uid")
         resp = client.post("/mutate", json=body)
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["response"]["allowed"] is True
-        assert "patch" not in data["response"]
-
-    def test_response_uid_echoed(self):
-        annotations = {"sc.dsmlp.ucsd.edu/runAsUser": "1000"}
-        pod_spec = {"containers": [{"name": "app", "securityContext": {"runAsUser": 1000}}]}
-        with patch("app.main.get_namespace_security_annotations", return_value=annotations):
-            body = _workload_review("Job", uid="my-job-uid", pod_spec=pod_spec)
-            resp = client.post("/mutate", json=body)
         assert resp.json()["response"]["uid"] == "my-job-uid"
