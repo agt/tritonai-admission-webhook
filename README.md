@@ -165,15 +165,25 @@ A pod with no NFS volumes is always accepted regardless of this annotation.
 
 ### `sc.dsmlp.ucsd.edu/prohibitedVolumeTypes`
 
-**Volume type restriction** — removes one or more types from the hardcoded permitted set:
+**Volume type restriction** — removes one or more types from the hardcoded permitted set and
+blocks the corresponding env/envFrom data sources in all containers:
 
 - Value is a comma-separated list of volume type names (e.g. `"emptyDir,secret"`).
 - Each named type is removed from the base permitted set for pods in this namespace.
 - A missing or empty annotation means no additional restrictions.
 - Type names not present in the base permitted set are ignored (logged as a warning).
 
+When a type is prohibited, the following container env/envFrom sources are also blocked
+across all `containers`, `initContainers`, and `ephemeralContainers`:
+
+| Prohibited type | Blocked env source | Blocked envFrom source |
+|---|---|---|
+| `configMap` | `env[].valueFrom.configMapKeyRef` | `envFrom[].configMapRef` |
+| `secret` | `env[].valueFrom.secretKeyRef` | `envFrom[].secretRef` |
+| `downwardAPI` | `env[].valueFrom.fieldRef`, `env[].valueFrom.resourceFieldRef` | — |
+
 ```
-sc.dsmlp.ucsd.edu/prohibitedVolumeTypes: "emptyDir,hostPath"
+sc.dsmlp.ucsd.edu/prohibitedVolumeTypes: "emptyDir,secret"
 ```
 
 ---

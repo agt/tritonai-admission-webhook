@@ -29,10 +29,19 @@ def _pod(
     return spec
 
 
-def _container(name: str = "app", sc: dict | None = None) -> dict:
+def _container(
+    name: str = "app",
+    sc: dict | None = None,
+    env: list | None = None,
+    env_from: list | None = None,
+) -> dict:
     c: dict = {"name": name}
     if sc is not None:
         c["securityContext"] = sc
+    if env is not None:
+        c["env"] = env
+    if env_from is not None:
+        c["envFrom"] = env_from
     return c
 
 
@@ -753,6 +762,143 @@ class TestProhibitedVolumeTypes:
     def test_base_disallowed_type_always_rejected(self):
         spec = self._spec({"name": "bad", "hostPath": {"path": "/host"}})
         assert validate_pod(_ALWAYS_ANNOTATIONS, spec).allowed is False
+
+    # ------------------------------------------------------------------ #
+    # configMap prohibition — env / envFrom
+    # ------------------------------------------------------------------ #
+
+    def test_configmap_prohibited_blocks_configmapkeyref_in_env(self):
+        c = _container(
+            sc={"runAsUser": 1000},
+            env=[{"name": "X", "valueFrom": {"configMapKeyRef": {"name": "cm", "key": "k"}}}],
+        )
+        result = validate_pod(self._anns("configMap"), _pod(containers=[c]))
+        assert result.allowed is False
+        assert "configMapKeyRef" in result.message
+        assert "X" in result.message
+
+    def test_configmap_prohibited_blocks_configmapref_in_envfrom(self):
+        c = _container(
+            sc={"runAsUser": 1000},
+            env_from=[{"configMapRef": {"name": "my-cm"}}],
+        )
+        result = validate_pod(self._anns("configMap"), _pod(containers=[c]))
+        assert result.allowed is False
+        assert "configMapRef" in result.message
+        assert "my-cm" in result.message
+
+    def test_configmap_not_prohibited_allows_configmapkeyref(self):
+        c = _container(
+            sc={"runAsUser": 1000},
+            env=[{"name": "X", "valueFrom": {"configMapKeyRef": {"name": "cm", "key": "k"}}}],
+        )
+        assert validate_pod(_ALWAYS_ANNOTATIONS, _pod(containers=[c])).allowed is True
+
+    # ------------------------------------------------------------------ #
+    # secret prohibition — env / envFrom
+    # ------------------------------------------------------------------ #
+
+    def test_secret_prohibited_blocks_secretkeyref_in_env(self):
+        c = _container(
+            sc={"runAsUser": 1000},
+            env=[{"name": "PWD", "valueFrom": {"secretKeyRef": {"name": "my-sec", "key": "pw"}}}],
+        )
+        result = validate_pod(self._anns("secret"), _pod(containers=[c]))
+        assert result.allowed is False
+        assert "secretKeyRef" in result.message
+        assert "PWD" in result.message
+
+    def test_secret_prohibited_blocks_secretref_in_envfrom(self):
+        c = _container(
+            sc={"runAsUser": 1000},
+            env_from=[{"secretRef": {"name": "my-sec"}}],
+        )
+        result = validate_pod(self._anns("secret"), _pod(containers=[c]))
+        assert result.allowed is False
+        assert "secretRef" in result.message
+        assert "my-sec" in result.message
+
+    def test_secret_not_prohibited_allows_secretkeyref(self):
+        c = _container(
+            sc={"runAsUser": 1000},
+            env=[{"name": "PWD", "valueFrom": {"secretKeyRef": {"name": "s", "key": "p"}}}],
+        )
+        assert validate_pod(_ALWAYS_ANNOTATIONS, _pod(containers=[c])).allowed is True
+
+    # ------------------------------------------------------------------ #
+    # downwardAPI prohibition — env
+    # ------------------------------------------------------------------ #
+
+    def test_downwardapi_prohibited_blocks_fieldref_in_env(self):
+        c = _container(
+            sc={"runAsUser": 1000},
+            env=[{"name": "NS", "valueFrom": {"fieldRef": {"fieldPath": "metadata.namespace"}}}],
+        )
+        result = validate_pod(self._anns("downwardAPI"), _pod(containers=[c]))
+        assert result.allowed is False
+        assert "fieldRef" in result.message
+        assert "NS" in result.message
+
+    def test_downwardapi_prohibited_blocks_resourcefieldref_in_env(self):
+        c = _container(
+            sc={"runAsUser": 1000},
+            env=[{"name": "CPU", "valueFrom": {"resourceFieldRef": {"resource": "limits.cpu"}}}],
+        )
+        result = validate_pod(self._anns("downwardAPI"), _pod(containers=[c]))
+        assert result.allowed is False
+        assert "resourceFieldRef" in result.message
+        assert "CPU" in result.message
+
+    def test_downwardapi_not_prohibited_allows_fieldref(self):
+        c = _container(
+            sc={"runAsUser": 1000},
+            env=[{"name": "NS", "valueFrom": {"fieldRef": {"fieldPath": "metadata.namespace"}}}],
+        )
+        assert validate_pod(_ALWAYS_ANNOTATIONS, _pod(containers=[c])).allowed is True
+
+    # ------------------------------------------------------------------ #
+    # Prohibiting one type does not block another type's env sources
+    # ------------------------------------------------------------------ #
+
+    def test_secret_prohibition_does_not_block_configmap_env(self):
+        c = _container(
+            sc={"runAsUser": 1000},
+            env=[{"name": "X", "valueFrom": {"configMapKeyRef": {"name": "cm", "key": "k"}}}],
+        )
+        assert validate_pod(self._anns("secret"), _pod(containers=[c])).allowed is True
+
+    def test_configmap_prohibition_does_not_block_secret_env(self):
+        c = _container(
+            sc={"runAsUser": 1000},
+            env=[{"name": "P", "valueFrom": {"secretKeyRef": {"name": "s", "key": "k"}}}],
+        )
+        assert validate_pod(self._anns("configMap"), _pod(containers=[c])).allowed is True
+
+    # ------------------------------------------------------------------ #
+    # Env checks apply to initContainers and ephemeralContainers too
+    # ------------------------------------------------------------------ #
+
+    def test_configmap_prohibition_applies_to_init_container_env(self):
+        main = _container(sc={"runAsUser": 1000})
+        init = _container(
+            "init",
+            sc={"runAsUser": 1000},
+            env=[{"name": "X", "valueFrom": {"configMapKeyRef": {"name": "cm", "key": "k"}}}],
+        )
+        result = validate_pod(self._anns("configMap"), _pod(containers=[main], init_containers=[init]))
+        assert result.allowed is False
+        assert "init" in result.message
+
+    def test_secret_prohibition_applies_to_ephemeral_container_envfrom(self):
+        main = _container(sc={"runAsUser": 1000})
+        eph = _container(
+            "debug",
+            sc={"runAsUser": 1000},
+            env_from=[{"secretRef": {"name": "s"}}],
+        )
+        result = validate_pod(self._anns("secret"), _pod(containers=[main], ephemeral_containers=[eph]))
+        assert result.allowed is False
+        assert "debug" in result.message
 
 
 class TestAllowedNfsVolumes:
