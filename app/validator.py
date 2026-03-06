@@ -283,6 +283,7 @@ _ALLOWED_VOLUME_TYPES: frozenset[str] = frozenset({
     "serviceAccountToken",
     "clusterTrustBundle",
     "podCertificate",
+    "projected",
 })
 
 

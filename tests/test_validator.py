@@ -560,7 +560,7 @@ class TestHardcodedConstraints:
 
 _ALLOWED_VOLUME_TYPES = [
     "configMap", "downwardAPI", "emptyDir", "image", "nfs",
-    "persistentVolumeClaim", "secret", "serviceAccountToken",
+    "persistentVolumeClaim", "projected", "secret", "serviceAccountToken",
     "clusterTrustBundle", "podCertificate",
 ]
 
@@ -615,10 +615,10 @@ class TestHardcodedVolumeTypes:
         assert "hostPath" in result.message
 
     def test_error_names_disallowed_type(self):
-        spec = self._spec({"name": "mysecret", "projected": {}})
+        spec = self._spec({"name": "mysecret", "hostIPC": {}})
         result = validate_pod(_ALWAYS_ANNOTATIONS, spec)
         assert result.allowed is False
-        assert "projected" in result.message
+        assert "hostIPC" in result.message
         assert "mysecret" in result.message
 
 

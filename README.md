@@ -172,7 +172,7 @@ webhook.  They are not configurable via namespace annotations.
 | Field | Allowed values |
 |---|---|
 | `securityContext.sysctls` | absent or `[]` |
-| `volumes[*]` type | `configMap`, `downwardAPI`, `emptyDir`, `image`, `nfs`, `persistentVolumeClaim`, `secret`, `serviceAccountToken`, `clusterTrustBundle`, `podCertificate` |
+| `volumes[*]` type | `configMap`, `downwardAPI`, `emptyDir`, `image`, `nfs`, `persistentVolumeClaim`, `projected`, `secret`, `serviceAccountToken`, `clusterTrustBundle`, `podCertificate` |
 
 ### Container-level (applies to `containers`, `initContainers`, and `ephemeralContainers`)
 
