@@ -1,14 +1,32 @@
 # TritonAI Pod Security Admission Webhook
 
-A FastAPI-based Kubernetes **Validating Admission Webhook** that enforces per-namespace
-Pod security requirements via namespace annotations.
+A FastAPI-based Kubernetes admission webhook with two components:
+
+- **Mutating webhook** (`/mutate`) — fills in missing security-context defaults before a pod is admitted.
+- **Validating webhook** (`/validate`) — rejects pods whose security context violates namespace policy.
 
 ---
 
 ## How It Works
 
-When a Pod is submitted to Kubernetes, the API server calls this webhook's `/validate`
-endpoint.  The webhook:
+### Mutating webhook (`/mutate`)
+
+Called first by the API server.  For each active constraint annotation on the pod's namespace:
+
+1. Looks up the corresponding `sc.dsmlp.ucsd.edu/default.<field>` annotation.
+2. For **REQUIRED_SCALAR** fields (`runAsUser`, `runAsGroup`, `allowPrivilegeEscalation`):
+   injects a pod-level `securityContext` default for any container that does not already
+   set the field.  Fields that are already set are **not modified**.
+3. For **OPTIONAL_SCALAR** (`fsGroup`) and **OPTIONAL_LIST** (`supplementalGroups`) fields:
+   no mutation is applied — absent is always acceptable; wrong values are left for the
+   validator to reject.
+4. For **NODE_SELECTOR** (`nodeLabel`): removes `spec.nodeName` unconditionally, and
+   injects the default label key into `spec.nodeSelector` if that key is absent.
+   An existing key is never overwritten.
+
+### Validating webhook (`/validate`)
+
+Called after mutation.  The webhook:
 
 1. Fetches `sc.dsmlp.ucsd.edu/*` annotations from the Pod's **namespace**.
 2. If **no** annotations are present → **reject** (policy must be explicit).
@@ -21,6 +39,8 @@ endpoint.  The webhook:
 ## Namespace Annotations
 
 Set security policy on a namespace by adding annotations prefixed `sc.dsmlp.ucsd.edu/`.
+Pair each constraint annotation with a `sc.dsmlp.ucsd.edu/default.<field>` annotation to
+enable the mutating webhook to fill in missing values automatically.
 
 ```yaml
 apiVersion: v1
@@ -28,12 +48,23 @@ kind: Namespace
 metadata:
   name: my-app
   annotations:
+    # Constraint annotations (enforced by the validator)
     sc.dsmlp.ucsd.edu/runAsUser: "1000,2000-3000,>5000000"
     sc.dsmlp.ucsd.edu/runAsGroup: "1000"
     sc.dsmlp.ucsd.edu/fsGroup: "1000"
     sc.dsmlp.ucsd.edu/supplementalGroups: "1000,2000-3000"
     sc.dsmlp.ucsd.edu/nodeLabel: "partition=gpu,partition=cpu"
+    # Default annotations (used by the mutator to fill in absent fields)
+    sc.dsmlp.ucsd.edu/default.runAsUser: "1000"
+    sc.dsmlp.ucsd.edu/default.runAsGroup: "1000"
+    sc.dsmlp.ucsd.edu/default.nodeLabel: "partition=gpu"
+    # NFS volume allowlist (see below)
+    sc.dsmlp.ucsd.edu/allowedNfsVolumes: "10.20.5.3:/export/data,itsnfs:/scratch,its-dsmlp-fs0[1-9]:/export/workspaces/*"
 ```
+
+Default annotations are only consulted by the mutator and must satisfy the corresponding
+constraint.  If a default annotation is absent or unparseable, the mutator logs a warning
+and skips that field; the validator still enforces the constraint.
 
 ### Constraint Value Syntax
 
@@ -112,12 +143,35 @@ Example — namespace annotation `"rack=b,rack=c"` would:
 | `{}` or absent                | Rejected | no token matches                  |
 | any spec with `nodeName` set  | Rejected | `nodeName` bypass is forbidden     |
 
+### `sc.dsmlp.ucsd.edu/allowedNfsVolumes`
+
+**NFS volume allowlist** — controls which NFS mounts a pod may use:
+
+- If the annotation is **absent or empty**, no NFS volumes are permitted.
+- If NFS volumes are present, **each** must match at least one entry in the comma-separated
+  allowlist.
+- A match is either an exact `server:/path` string or a **shell glob** (fnmatch) pattern,
+  e.g. `its-dsmlp-fs0[1-9]:/export/workspaces/*FA25`.
+
+```
+sc.dsmlp.ucsd.edu/allowedNfsVolumes: "10.20.5.3:/export/data,itsnfs:/scratch,its-dsmlp-fs0[1-9]:/export/workspaces/*"
+```
+
+A pod with no NFS volumes is always accepted regardless of this annotation.
+
 ---
 
 ## Hardcoded Security Constraints
 
 The following constraints are **always enforced** on every pod that passes through the
 webhook.  They are not configurable via namespace annotations.
+
+### Pod-level
+
+| Field | Allowed values |
+|---|---|
+| `securityContext.sysctls` | absent or `[]` |
+| `volumes[*]` type | `configMap`, `downwardAPI`, `emptyDir`, `image`, `nfs`, `persistentVolumeClaim`, `secret`, `serviceAccountToken`, `clusterTrustBundle`, `podCertificate` |
 
 ### Container-level (applies to `containers`, `initContainers`, and `ephemeralContainers`)
 
@@ -127,12 +181,6 @@ webhook.  They are not configurable via namespace annotations.
 | `securityContext.privileged` | absent or `false` |
 | `securityContext.capabilities.add` | absent, empty, or `["NET_BIND_SERVICE"]` only |
 | `securityContext.procMount` | absent, `""`, or `"Default"` |
-
-### Pod-level
-
-| Field | Allowed values |
-|---|---|
-| `securityContext.sysctls` | absent or `[]` |
 
 Any violation is reported as a validation error and the pod is rejected.
 
