@@ -7,7 +7,7 @@ it only where the relevant field is **absent** (empty).  Fields that are already
 set are left untouched — the downstream ValidatingAdmissionWebhook is responsible
 for rejecting any values that violate policy.
 
-   REQUIRED_SCALAR fields (runAsUser, runAsGroup, allowPrivilegeEscalation)
+   REQUIRED_SCALAR fields (runAsUser, runAsGroup)
      The pod-level securityContext is patched (or created from scratch) to
      supply the default for any container that does not carry the field itself.
 
@@ -16,9 +16,9 @@ for rejecting any values that violate policy.
 
    NODE_SELECTOR (nodeLabel)
      • pod.spec.nodeName is always removed — it unconditionally bypasses nodeSelector.
-     • If nodeSelector does not already contain the key specified in the default
-       label, that key=value pair is injected.  If the key is already present
-       (regardless of its value), it is left untouched.
+     • The default key=value label is injected only when the pod specifies no
+       nodeSelector at all.  Any existing nodeSelector (regardless of content)
+       is left untouched.
 
 Returns a (possibly empty) list of RFC 6902 JSON Patch operations.  The caller
 base64-encodes the JSON-serialised list and returns it to the API server, which
@@ -224,7 +224,7 @@ def mutate_pod(
     for field_suffix, field_spec in _FIELD_SPECS.items():
         mutator = _SC_MUTATORS.get(field_spec.behavior)
         if mutator is None:
-            continue  # OPTIONAL_SCALAR, OPTIONAL_LIST, NODE_SELECTOR handled elsewhere
+            continue  # OPTIONAL_SCALAR and OPTIONAL_LIST fields have no mutations; NODE_SELECTOR handled below
 
         annotation_key = f"sc.dsmlp.ucsd.edu/{field_suffix}"
         if annotation_key not in namespace_annotations:
