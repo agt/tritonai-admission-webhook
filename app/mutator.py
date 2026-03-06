@@ -197,11 +197,11 @@ _SC_MUTATORS = {
 # ---------------------------------------------------------------------------
 
 
-def mutate_pod(
+def _compute_mutations(
     namespace_annotations: dict[str, str],
     pod_spec: dict[str, Any],
-) -> list[dict[str, Any]]:
-    """Compute RFC 6902 JSON Patch operations to fill in missing defaults in *pod_spec*.
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Apply namespace defaults to *pod_spec* and return (mutated_spec, patches).
 
     Parameters
     ----------
@@ -213,9 +213,8 @@ def mutate_pod(
 
     Returns
     -------
-    A (possibly empty) list of JSON Patch operation dicts.  Returns an empty
-    list when no constraint annotations are active or no mutations are needed.
-    The caller is responsible for JSON-serialising and base64-encoding the list.
+    A tuple of (mutated pod spec dict, RFC 6902 JSON Patch operation list).
+    The patch paths are relative to ``/spec`` (i.e. they start with ``/spec/``).
     """
     pod = copy.deepcopy(pod_spec)
     patches: list[dict[str, Any]] = []
@@ -242,4 +241,32 @@ def mutate_pod(
         nl_default = _parse_default("nodeLabel", node_label_key, namespace_annotations)
         _mutate_node_selector(pod, nl_default, patches)
 
+    return pod, patches
+
+
+def mutate_pod(
+    namespace_annotations: dict[str, str],
+    pod_spec: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Compute RFC 6902 JSON Patch operations to fill in missing defaults in *pod_spec*.
+
+    Returns a (possibly empty) list of JSON Patch operation dicts.  Returns an
+    empty list when no constraint annotations are active or no mutations are needed.
+    The caller is responsible for JSON-serialising and base64-encoding the list.
+    """
+    _, patches = _compute_mutations(namespace_annotations, pod_spec)
     return patches
+
+
+def mutate_pod_spec(
+    namespace_annotations: dict[str, str],
+    pod_spec: dict[str, Any],
+) -> dict[str, Any]:
+    """Apply namespace defaults to *pod_spec* and return the resulting spec dict.
+
+    Equivalent to ``mutate_pod`` but returns the mutated spec rather than the
+    patch list.  Used by the validating webhook when it needs to pre-apply
+    defaults before validating a workload's pod template.
+    """
+    mutated, _ = _compute_mutations(namespace_annotations, pod_spec)
+    return mutated

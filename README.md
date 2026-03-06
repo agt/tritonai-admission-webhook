@@ -9,13 +9,23 @@ These TritonGPT/TritonAI webhooks use namespace annotations to establish desired
 
 Both sets of webhooks can operate simultaneously within the cluster, with namespace labels determining which is invoked.  In theory, a namespace could subject its pods to both regimes.
 
+Both webhooks handle **Pod** resources directly and also inspect the pod templates
+embedded in **Deployment**, **ReplicaSet**, **StatefulSet**, **DaemonSet**, **Job**, and **CronJob** objects.
+All other resource kinds are passed through without inspection.
+
 ---
 
 ## How It Works
 
 ### Mutating webhook (`/mutate`)
 
-Called first by the API server.  For each active constraint annotation on the pod's namespace:
+Called first by the API server.  Handles Pod resources and the pod templates
+of Deployment, ReplicaSet, StatefulSet, DaemonSet, Job, and CronJob objects.
+For workload resources, patch paths are rewritten from `/spec/…` to the
+appropriate template spec location (e.g. `/spec/template/spec/…` for a
+Deployment, `/spec/jobTemplate/spec/template/spec/…` for a CronJob).
+
+For each active constraint annotation on the pod's namespace:
 
 1. Looks up the corresponding `sc.dsmlp.ucsd.edu/default.<field>` annotation.
 2. For **REQUIRED_SCALAR** fields (`runAsUser`, `runAsGroup`, `allowPrivilegeEscalation`):
@@ -30,7 +40,13 @@ Called first by the API server.  For each active constraint annotation on the po
 
 ### Validating webhook (`/validate`)
 
-Called after mutation.  The webhook:
+Called after mutation.  Handles Pod resources and the pod templates of
+Deployment, ReplicaSet, StatefulSet, DaemonSet, Job, and CronJob objects.
+For workload resources, namespace defaults are applied to the pod template
+spec via the mutator before validation so the validator sees the same
+(post-mutation) spec the API server would ultimately use.
+
+The webhook:
 
 1. Fetches `sc.dsmlp.ucsd.edu/*` annotations from the Pod's **namespace**.
 2. If **no** annotations are present → **reject** (policy must be explicit).

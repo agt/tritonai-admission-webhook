@@ -56,8 +56,8 @@ def test_healthz():
 # ---------------------------------------------------------------------------
 
 
-def test_non_pod_allowed():
-    body = _review(kind="Deployment")
+def test_non_pod_unsupported_kind_allowed():
+    body = _review(kind="ServiceAccount")
     resp = client.post("/validate", json=body)
     assert resp.status_code == 200
     data = resp.json()
