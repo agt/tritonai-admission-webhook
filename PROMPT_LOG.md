@@ -107,7 +107,7 @@ remove support for  "allowPrivilegeEscalation" constraints - we will address it 
 
 Update checks to include a pod's ephemeralContainers in addition to initContainers and Containers.
 
-# Prohibit privilege escalation
+# Hardcoded security standards
 
 This change will pertain only to the validator portion.
 
@@ -120,3 +120,46 @@ For all Containers, initContainers, and ephemeralContainers, ensure that:
 For the Pod-level securityContext, ensure that:
 * securityContext.sysctls is missing, or an empty list
 	
+
+# Remove validation from the Mutator
+
+Remove all constraint checks from the mutator, so that its only job is to apply defaults when the relevant fields are empty.
+
+# Volume constraints
+
+a) Add a new hardcoded Validator constraint ensuring that Pod volumes are only of the following types: "configMap,downwardAPI, emptyDir,image,nfs,persistentVolumeClaim,secret,
+serviceAccountToken,clusterTrustBundle,podCertificate".
+
+b) Add a new Validator namespace attribute constraint "sc.dsmlp.ucsd.edu/allowedNfsVolumes" which defines which (server, remote path) pairs are permitted within a Pod specification's NFS volumes, if any are present.
+
+There is no default, a missing attribute should be processed as if it were an empty string.
+
+The constraint attribute value is a comma-separated list of NFS remote resource names, each following the Linux mount convention of "servername:/path/to/mount". For example: "10.20.5.3:/export/data,itsnfs:/scratch,its-dsmlp-fs03:/export/workspaces/PROJ_TEST".
+
+Each of the Pod's NFS Volumes, if any, must match at least one of the remote resources listed in the constraint attribute.
+
+A match is defined either as a direct string match (server to server, path to path), or by treating the constraint resource name as a shell glob, e.g. "its-dsmlp-fs0[1-9]:/export/workspaces/*FA25", and that shell glob pattern matching the Pod Volume.
+
+# Scope of nodeSelector
+
+The mutator should only insert default.nodeSelector if the pod fails to specify any nodeSelector.
+
+# Extend list of permitted volume types
+
+add "projected" to the list of allowed volume types.
+
+# Permit narrowing of the allowed volume types (e.g. disallow secrets, configmaps, 
+
+Add a new optional constraint "sc.dsmlp.ucsd.edu/prohibitedVolumeTypes" which removes one or more volume types from the hardcoded initial set of permitted volume types.
+
+# Protect non-Volume access to data sources
+
+Some data sources may be presented either via Volumes or as environment variables through Env or EnvFrom. When a volume type is prohibited, we will also block the corresponding environment variable path.
+
+If "configMap" is prohibited by way of the "prohibitedVolumeTypes" annotation, reject attempts to include configMapKeyRef or configMapRef in Env/EnvFrom or downwardAPI sections.
+
+If "secret" is prohibited by way of the "prohibitedVolumeTypes" annotation, reject attempts to include secretKeyRef or secretRef in Env/EnvFrom sections.
+
+If "downwardAPI" is prohibited by way of the "prohibitedVolumeTypes" annotation, reject attempts to include fieldRef or resourceFieldRef in Env/EnvFrom sections.
+
+Generate code to implement the above, and update README.md to document the additional behavior.
