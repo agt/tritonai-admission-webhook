@@ -163,3 +163,19 @@ If "secret" is prohibited by way of the "prohibitedVolumeTypes" annotation, reje
 If "downwardAPI" is prohibited by way of the "prohibitedVolumeTypes" annotation, reject attempts to include fieldRef or resourceFieldRef in Env/EnvFrom sections.
 
 Generate code to implement the above, and update README.md to document the additional behavior.
+
+# Workload template validation
+
+Expand scope of the validator to include review of of the Pod templates contained within Deployment, Job, CronJob, StatefulSet, and similar kubernetes objects. Pass the template through the mutator code first to ensure defaults are applied, then validate the updated template as you would a Pod against namespace-specific and hardcoded constraints.
+
+# Rebase
+
+please rebase from upstream main branch
+
+# Restrict mutator to Pod only
+
+When called by the kubernetes API server, the mutator should only patch kind==Pod.  (mutator may be called internally to support validation of workload templates).
+
+# Update prompt log
+
+please update PROMPT_LOG.md to incorporate any of my prompts which have not been captured there.
