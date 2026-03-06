@@ -1,3 +1,6 @@
+
+_Note (agt): this validator was built via Claude Code, with prompts as outlined in PROMPT_LOG.md.  I have reviewed the code and tests and am confident in its output._
+
 # TritonAI Pod Security Admission Webhook
 
 A FastAPI-based Kubernetes Pod admission webhook with two components:
