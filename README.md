@@ -5,7 +5,7 @@ A FastAPI-based Kubernetes Pod admission webhook with two components:
 - **Mutating webhook** (`/mutate`) — fills in missing security-context defaults before a pod is admitted.
 - **Validating webhook** (`/validate`) — rejects pods whose security context violates namespace policy.
 
-These TritonGPT/TritonAI webhooks use namespace annotations to set policy and defaults.  This is in contrast to `dsmlp-validator` and `dsmlp-mutator` which queries user/course settings from the SICad/awsed database.
+These TritonGPT/TritonAI webhooks use namespace annotations to establish desired policy and defaults for that namespace.  This is in contrast to `dsmlp-validator` and `dsmlp-mutator` which queries user/course settings from the SICad/awsed database.
 
 Both sets of webhooks can operate simultaneously within the cluster, with namespace labels determining which is invoked.  In theory, a namespace could subject its pods to both regimes.
 
