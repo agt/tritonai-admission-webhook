@@ -14,6 +14,7 @@ def _pod(
     containers: list[dict] | None = None,
     init_containers: list[dict] | None = None,
     ephemeral_containers: list[dict] | None = None,
+    volumes: list[dict] | None = None,
 ) -> dict:
     spec: dict = {}
     if pod_sc is not None:
@@ -23,6 +24,8 @@ def _pod(
         spec["initContainers"] = init_containers
     if ephemeral_containers:
         spec["ephemeralContainers"] = ephemeral_containers
+    if volumes is not None:
+        spec["volumes"] = volumes
     return spec
 
 
@@ -549,3 +552,215 @@ class TestHardcodedConstraints:
         result = validate_pod(_ALWAYS_ANNOTATIONS, spec)
         assert result.allowed is False
         assert "debug" in result.message
+
+
+# ---------------------------------------------------------------------------
+# Hardcoded volume type constraint
+# ---------------------------------------------------------------------------
+
+_ALLOWED_VOLUME_TYPES = [
+    "configMap", "downwardAPI", "emptyDir", "image", "nfs",
+    "persistentVolumeClaim", "secret", "serviceAccountToken",
+    "clusterTrustBundle", "podCertificate",
+]
+
+
+class TestHardcodedVolumeTypes:
+
+    def _spec(self, *volumes: dict) -> dict:
+        """Build a valid pod spec with the given volume dicts."""
+        return _pod(
+            containers=[_container(sc={"runAsUser": 1000})],
+            volumes=list(volumes),
+        )
+
+    def test_no_volumes_ok(self):
+        assert validate_pod(_ALWAYS_ANNOTATIONS, _pod(containers=[_container(sc={"runAsUser": 1000})])).allowed is True
+
+    def test_each_allowed_non_nfs_type_ok(self):
+        for vol_type in _ALLOWED_VOLUME_TYPES:
+            if vol_type == "nfs":
+                continue  # tested separately; needs allowedNfsVolumes annotation too
+            spec = self._spec({"name": "v", vol_type: {}})
+            result = validate_pod(_ALWAYS_ANNOTATIONS, spec)
+            assert result.allowed is True, f"Expected {vol_type!r} to be allowed; got: {result.message}"
+
+    def test_nfs_type_ok_when_annotation_permits(self):
+        anns = {**_ALWAYS_ANNOTATIONS, "sc.dsmlp.ucsd.edu/allowedNfsVolumes": "nfsserver:/path"}
+        spec = self._spec({"name": "v", "nfs": {"server": "nfsserver", "path": "/path"}})
+        assert validate_pod(anns, spec).allowed is True
+
+    def test_disallowed_type_rejected(self):
+        spec = self._spec({"name": "v", "hostPath": {"path": "/host"}})
+        result = validate_pod(_ALWAYS_ANNOTATIONS, spec)
+        assert result.allowed is False
+        assert "hostPath" in result.message
+
+    def test_multiple_volumes_all_allowed_ok(self):
+        spec = self._spec(
+            {"name": "cfg", "configMap": {"name": "my-cm"}},
+            {"name": "tmp", "emptyDir": {}},
+        )
+        assert validate_pod(_ALWAYS_ANNOTATIONS, spec).allowed is True
+
+    def test_one_disallowed_among_many_rejected(self):
+        spec = self._spec(
+            {"name": "cfg", "configMap": {}},
+            {"name": "bad", "hostPath": {"path": "/etc"}},
+            {"name": "tmp", "emptyDir": {}},
+        )
+        result = validate_pod(_ALWAYS_ANNOTATIONS, spec)
+        assert result.allowed is False
+        assert "bad" in result.message
+        assert "hostPath" in result.message
+
+    def test_error_names_disallowed_type(self):
+        spec = self._spec({"name": "mysecret", "projected": {}})
+        result = validate_pod(_ALWAYS_ANNOTATIONS, spec)
+        assert result.allowed is False
+        assert "projected" in result.message
+        assert "mysecret" in result.message
+
+
+# ---------------------------------------------------------------------------
+# allowedNfsVolumes annotation constraint
+# ---------------------------------------------------------------------------
+
+_NFS_VOL = {"name": "nfs-vol", "nfs": {"server": "10.20.5.3", "path": "/export/data"}}
+_NFS_ANNOTATIONS_BASE = {**_ALWAYS_ANNOTATIONS}
+
+
+def _nfs_spec(*nfs_volumes: dict) -> dict:
+    """Pod spec with the given NFS volume dicts."""
+    return _pod(
+        containers=[_container(sc={"runAsUser": 1000})],
+        volumes=list(nfs_volumes),
+    )
+
+
+class TestAllowedNfsVolumes:
+
+    # ------------------------------------------------------------------ #
+    # No NFS volumes — always passes regardless of annotation
+    # ------------------------------------------------------------------ #
+
+    def test_no_nfs_volumes_annotation_absent_ok(self):
+        spec = _nfs_spec()
+        assert validate_pod(_NFS_ANNOTATIONS_BASE, spec).allowed is True
+
+    def test_no_nfs_volumes_annotation_empty_ok(self):
+        anns = {**_NFS_ANNOTATIONS_BASE, "sc.dsmlp.ucsd.edu/allowedNfsVolumes": ""}
+        assert validate_pod(anns, _nfs_spec()).allowed is True
+
+    def test_no_nfs_volumes_annotation_with_patterns_ok(self):
+        anns = {**_NFS_ANNOTATIONS_BASE, "sc.dsmlp.ucsd.edu/allowedNfsVolumes": "10.20.5.3:/export/data"}
+        assert validate_pod(anns, _nfs_spec()).allowed is True
+
+    # ------------------------------------------------------------------ #
+    # NFS volume present — annotation absent/empty → denied
+    # ------------------------------------------------------------------ #
+
+    def test_nfs_volume_annotation_absent_rejected(self):
+        result = validate_pod(_NFS_ANNOTATIONS_BASE, _nfs_spec(_NFS_VOL))
+        assert result.allowed is False
+        assert "nfs-vol" in result.message
+        assert "allowedNfsVolumes" in result.message
+
+    def test_nfs_volume_annotation_empty_string_rejected(self):
+        anns = {**_NFS_ANNOTATIONS_BASE, "sc.dsmlp.ucsd.edu/allowedNfsVolumes": ""}
+        result = validate_pod(anns, _nfs_spec(_NFS_VOL))
+        assert result.allowed is False
+
+    def test_nfs_volume_annotation_whitespace_only_rejected(self):
+        anns = {**_NFS_ANNOTATIONS_BASE, "sc.dsmlp.ucsd.edu/allowedNfsVolumes": "   "}
+        result = validate_pod(anns, _nfs_spec(_NFS_VOL))
+        assert result.allowed is False
+
+    # ------------------------------------------------------------------ #
+    # Exact matches
+    # ------------------------------------------------------------------ #
+
+    def test_exact_match_allowed(self):
+        anns = {**_NFS_ANNOTATIONS_BASE, "sc.dsmlp.ucsd.edu/allowedNfsVolumes": "10.20.5.3:/export/data"}
+        assert validate_pod(anns, _nfs_spec(_NFS_VOL)).allowed is True
+
+    def test_exact_match_server_mismatch_rejected(self):
+        anns = {**_NFS_ANNOTATIONS_BASE, "sc.dsmlp.ucsd.edu/allowedNfsVolumes": "10.20.5.4:/export/data"}
+        result = validate_pod(anns, _nfs_spec(_NFS_VOL))
+        assert result.allowed is False
+
+    def test_exact_match_path_mismatch_rejected(self):
+        anns = {**_NFS_ANNOTATIONS_BASE, "sc.dsmlp.ucsd.edu/allowedNfsVolumes": "10.20.5.3:/export/other"}
+        result = validate_pod(anns, _nfs_spec(_NFS_VOL))
+        assert result.allowed is False
+
+    def test_multiple_exact_patterns_or_semantics(self):
+        anns = {**_NFS_ANNOTATIONS_BASE, "sc.dsmlp.ucsd.edu/allowedNfsVolumes": "itsnfs:/scratch,10.20.5.3:/export/data"}
+        assert validate_pod(anns, _nfs_spec(_NFS_VOL)).allowed is True
+
+    # ------------------------------------------------------------------ #
+    # Glob matches
+    # ------------------------------------------------------------------ #
+
+    def test_glob_server_wildcard_allowed(self):
+        vol = {"name": "v", "nfs": {"server": "its-dsmlp-fs03", "path": "/export/workspaces/PROJ_TEST"}}
+        anns = {**_NFS_ANNOTATIONS_BASE, "sc.dsmlp.ucsd.edu/allowedNfsVolumes": "its-dsmlp-fs0[1-9]:/export/workspaces/*"}
+        assert validate_pod(anns, _nfs_spec(vol)).allowed is True
+
+    def test_glob_path_wildcard_allowed(self):
+        vol = {"name": "v", "nfs": {"server": "itsnfs", "path": "/scratch/proj"}}
+        anns = {**_NFS_ANNOTATIONS_BASE, "sc.dsmlp.ucsd.edu/allowedNfsVolumes": "itsnfs:/scratch/*"}
+        assert validate_pod(anns, _nfs_spec(vol)).allowed is True
+
+    def test_glob_outside_range_rejected(self):
+        # its-dsmlp-fs0[1-9] does not match its-dsmlp-fs10
+        vol = {"name": "v", "nfs": {"server": "its-dsmlp-fs10", "path": "/export/workspaces/PROJ"}}
+        anns = {**_NFS_ANNOTATIONS_BASE, "sc.dsmlp.ucsd.edu/allowedNfsVolumes": "its-dsmlp-fs0[1-9]:/export/workspaces/*"}
+        result = validate_pod(anns, _nfs_spec(vol))
+        assert result.allowed is False
+
+    def test_glob_full_example_from_spec(self):
+        """Reproduce the example from the requirements."""
+        anns = {
+            **_NFS_ANNOTATIONS_BASE,
+            "sc.dsmlp.ucsd.edu/allowedNfsVolumes": (
+                "10.20.5.3:/export/data,"
+                "itsnfs:/scratch,"
+                "its-dsmlp-fs03:/export/workspaces/PROJ_TEST"
+            ),
+        }
+        vol = {"name": "v", "nfs": {"server": "its-dsmlp-fs03", "path": "/export/workspaces/PROJ_TEST"}}
+        assert validate_pod(anns, _nfs_spec(vol)).allowed is True
+
+    # ------------------------------------------------------------------ #
+    # Multiple NFS volumes
+    # ------------------------------------------------------------------ #
+
+    def test_multiple_nfs_all_allowed(self):
+        anns = {**_NFS_ANNOTATIONS_BASE, "sc.dsmlp.ucsd.edu/allowedNfsVolumes": "nfs1:/data,nfs2:/data"}
+        vol1 = {"name": "v1", "nfs": {"server": "nfs1", "path": "/data"}}
+        vol2 = {"name": "v2", "nfs": {"server": "nfs2", "path": "/data"}}
+        assert validate_pod(anns, _nfs_spec(vol1, vol2)).allowed is True
+
+    def test_multiple_nfs_one_disallowed_rejected(self):
+        anns = {**_NFS_ANNOTATIONS_BASE, "sc.dsmlp.ucsd.edu/allowedNfsVolumes": "nfs1:/data"}
+        vol1 = {"name": "v1", "nfs": {"server": "nfs1", "path": "/data"}}
+        vol2 = {"name": "v2", "nfs": {"server": "nfs2", "path": "/data"}}
+        result = validate_pod(anns, _nfs_spec(vol1, vol2))
+        assert result.allowed is False
+        assert "v2" in result.message
+
+    # ------------------------------------------------------------------ #
+    # NFS volumes alongside other volume types
+    # ------------------------------------------------------------------ #
+
+    def test_nfs_alongside_allowed_types_ok(self):
+        anns = {**_NFS_ANNOTATIONS_BASE, "sc.dsmlp.ucsd.edu/allowedNfsVolumes": "10.20.5.3:/export/data"}
+        spec = _pod(
+            containers=[_container(sc={"runAsUser": 1000})],
+            volumes=[
+                {"name": "cfg", "configMap": {"name": "my-cm"}},
+                _NFS_VOL,
+            ],
+        )
+        assert validate_pod(anns, spec).allowed is True

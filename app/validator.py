@@ -30,6 +30,7 @@ OPTIONAL_SCALAR / OPTIONAL_LIST semantics
 """
 from __future__ import annotations
 
+import fnmatch
 import logging
 from dataclasses import dataclass, field
 from enum import Enum, auto
@@ -271,12 +272,26 @@ _BEHAVIOR_HANDLERS: dict[
 
 _ALLOWED_CAPABILITIES: frozenset[str] = frozenset({"NET_BIND_SERVICE"})
 
+_ALLOWED_VOLUME_TYPES: frozenset[str] = frozenset({
+    "configMap",
+    "downwardAPI",
+    "emptyDir",
+    "image",
+    "nfs",
+    "persistentVolumeClaim",
+    "secret",
+    "serviceAccountToken",
+    "clusterTrustBundle",
+    "podCertificate",
+})
+
 
 def _validate_hardcoded_constraints(pod_spec: dict[str, Any]) -> list[str]:
     """Enforce security constraints that apply to every pod, regardless of namespace annotations.
 
     Pod-level:
       - securityContext.sysctls must be absent or empty.
+      - Each volume must use one of the permitted types.
 
     Per container (containers, initContainers, ephemeralContainers):
       - securityContext.allowPrivilegeEscalation must be absent or false.
@@ -293,6 +308,16 @@ def _validate_hardcoded_constraints(pod_spec: dict[str, Any]) -> list[str]:
         errors.append(
             f"Pod securityContext.sysctls must be absent or empty; found {sysctls!r}"
         )
+
+    # Pod-level: volume types
+    for volume in pod_spec.get("volumes") or []:
+        vol_name = volume.get("name", "<unnamed>")
+        disallowed_types = [k for k in volume if k != "name" and k not in _ALLOWED_VOLUME_TYPES]
+        for vol_type in disallowed_types:
+            errors.append(
+                f"Volume {vol_name!r} uses disallowed type {vol_type!r}; "
+                f"permitted types: {sorted(_ALLOWED_VOLUME_TYPES)}"
+            )
 
     # Container-level checks
     for container in _all_containers(pod_spec):
@@ -326,6 +351,48 @@ def _validate_hardcoded_constraints(pod_spec: dict[str, Any]) -> list[str]:
             errors.append(
                 f"Container {cname!r} securityContext.procMount must be absent or 'Default'; "
                 f"found {proc_mount!r}"
+            )
+
+    return errors
+
+
+# ---------------------------------------------------------------------------
+# NFS volume annotation constraint
+# ---------------------------------------------------------------------------
+
+_NFS_ANNOTATION_KEY = "sc.dsmlp.ucsd.edu/allowedNfsVolumes"
+
+
+def _validate_nfs_volumes(
+    pod_spec: dict[str, Any],
+    namespace_annotations: dict[str, str],
+) -> list[str]:
+    """Validate pod NFS volumes against the allowedNfsVolumes namespace annotation.
+
+    A missing annotation is treated as an empty string (no NFS volumes permitted).
+
+    Each NFS volume's "server:/path" is matched against the comma-separated list of
+    glob patterns in the annotation.  At least one pattern must match.
+    """
+    nfs_volumes = [v for v in (pod_spec.get("volumes") or []) if "nfs" in v]
+    if not nfs_volumes:
+        return []
+
+    raw = namespace_annotations.get(_NFS_ANNOTATION_KEY, "")
+    patterns = [t.strip() for t in raw.split(",") if t.strip()] if raw.strip() else []
+
+    errors: list[str] = []
+    for volume in nfs_volumes:
+        vol_name = volume.get("name", "<unnamed>")
+        nfs = volume["nfs"]
+        server = nfs.get("server", "")
+        path = nfs.get("path", "")
+        resource = f"{server}:{path}"
+
+        if not any(fnmatch.fnmatch(resource, p) for p in patterns):
+            errors.append(
+                f"NFS volume {vol_name!r} ({resource!r}) does not match any entry in "
+                f"{_NFS_ANNOTATION_KEY!r}"
             )
 
     return errors
@@ -409,5 +476,8 @@ def validate_pod(
 
     # Apply hardcoded constraints (always enforced)
     all_errors.extend(_validate_hardcoded_constraints(pod_spec))
+
+    # Apply NFS volume constraint (annotation-driven, missing annotation = deny all NFS)
+    all_errors.extend(_validate_nfs_volumes(pod_spec, namespace_annotations))
 
     return ValidationResult(allowed=len(all_errors) == 0, errors=all_errors)

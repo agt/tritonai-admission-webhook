@@ -59,6 +59,8 @@ metadata:
     sc.dsmlp.ucsd.edu/default.runAsUser: "1000"
     sc.dsmlp.ucsd.edu/default.runAsGroup: "1000"
     sc.dsmlp.ucsd.edu/default.nodeLabel: "partition=gpu"
+    # NFS volume allowlist (see below)
+    sc.dsmlp.ucsd.edu/allowedNfsVolumes: "10.20.5.3:/export/data,itsnfs:/scratch,its-dsmlp-fs0[1-9]:/export/workspaces/*"
 ```
 
 Default annotations are only consulted by the mutator and must satisfy the corresponding
@@ -142,12 +144,35 @@ Example — namespace annotation `"rack=b,rack=c"` would:
 | `{}` or absent                | Rejected | no token matches                  |
 | any spec with `nodeName` set  | Rejected | `nodeName` bypass is forbidden     |
 
+### `sc.dsmlp.ucsd.edu/allowedNfsVolumes`
+
+**NFS volume allowlist** — controls which NFS mounts a pod may use:
+
+- If the annotation is **absent or empty**, no NFS volumes are permitted.
+- If NFS volumes are present, **each** must match at least one entry in the comma-separated
+  allowlist.
+- A match is either an exact `server:/path` string or a **shell glob** (fnmatch) pattern,
+  e.g. `its-dsmlp-fs0[1-9]:/export/workspaces/*FA25`.
+
+```
+sc.dsmlp.ucsd.edu/allowedNfsVolumes: "10.20.5.3:/export/data,itsnfs:/scratch,its-dsmlp-fs0[1-9]:/export/workspaces/*"
+```
+
+A pod with no NFS volumes is always accepted regardless of this annotation.
+
 ---
 
 ## Hardcoded Security Constraints
 
 The following constraints are **always enforced** on every pod that passes through the
 webhook.  They are not configurable via namespace annotations.
+
+### Pod-level
+
+| Field | Allowed values |
+|---|---|
+| `securityContext.sysctls` | absent or `[]` |
+| `volumes[*]` type | `configMap`, `downwardAPI`, `emptyDir`, `image`, `nfs`, `persistentVolumeClaim`, `secret`, `serviceAccountToken`, `clusterTrustBundle`, `podCertificate` |
 
 ### Container-level (applies to `containers`, `initContainers`, and `ephemeralContainers`)
 
@@ -157,12 +182,6 @@ webhook.  They are not configurable via namespace annotations.
 | `securityContext.privileged` | absent or `false` |
 | `securityContext.capabilities.add` | absent, empty, or `["NET_BIND_SERVICE"]` only |
 | `securityContext.procMount` | absent, `""`, or `"Default"` |
-
-### Pod-level
-
-| Field | Allowed values |
-|---|---|
-| `securityContext.sysctls` | absent or `[]` |
 
 Any violation is reported as a validation error and the pod is rejected.
 
