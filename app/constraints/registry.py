@@ -1,10 +1,14 @@
 """
 Constraint registry: maps annotation keys to their parsers.
 
-To add a new annotation-backed constraint:
+To add a new ConstraintSet-based annotation constraint:
   1. Implement a ConstraintParser subclass in an appropriate module.
   2. Add an entry to CONSTRAINT_REGISTRY below.
-  3. Add a FieldValidator entry in app/validator.py.
+  3. Add a FieldSpec entry in app/validator.py (_FIELD_SPECS).
+
+For annotation constraints that do not fit the ConstraintSet model (e.g. glob-
+pattern lists like allowedNfsVolumes), implement the validation logic directly in
+app/validator.py and call it from validate_pod().
 """
 from __future__ import annotations
 

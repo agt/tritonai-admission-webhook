@@ -21,8 +21,8 @@ Called first by the API server.  For each active constraint annotation on the po
    no mutation is applied — absent is always acceptable; wrong values are left for the
    validator to reject.
 4. For **NODE_SELECTOR** (`nodeLabel`): removes `spec.nodeName` unconditionally, and
-   injects the default label key into `spec.nodeSelector` if that key is absent.
-   An existing key is never overwritten.
+   injects the default `key=value` label as a new `spec.nodeSelector` only when the
+   pod specifies no `nodeSelector` at all.  Any existing `nodeSelector` is left untouched.
 
 ### Validating webhook (`/validate`)
 
@@ -53,7 +53,6 @@ metadata:
     sc.dsmlp.ucsd.edu/runAsGroup: "1000"
     sc.dsmlp.ucsd.edu/fsGroup: "1000"
     sc.dsmlp.ucsd.edu/supplementalGroups: "1000,2000-3000"
-    sc.dsmlp.ucsd.edu/allowPrivilegeEscalation: "false"
     sc.dsmlp.ucsd.edu/nodeLabel: "partition=gpu,partition=cpu"
     # Default annotations (used by the mutator to fill in absent fields)
     sc.dsmlp.ucsd.edu/default.runAsUser: "1000"
@@ -101,7 +100,7 @@ sc.dsmlp.ucsd.edu/nodeLabel: "rack=b,rack=c"
 
 ## Validation Behavior per Annotation
 
-### `sc.dsmlp.ucsd.edu/runAsUser`, `sc.dsmlp.ucsd.edu/runAsGroup`, `sc.dsmlp.ucsd.edu/allowPrivilegeEscalation`
+### `sc.dsmlp.ucsd.edu/runAsUser`, `sc.dsmlp.ucsd.edu/runAsGroup`
 
 **Required field** — enforcement is strict:
 
@@ -109,6 +108,8 @@ sc.dsmlp.ucsd.edu/nodeLabel: "rack=b,rack=c"
 - All **container/initContainer** `securityContext`s that set the field → must match.
 - If the Pod-level `securityContext` is **absent** (or does not set the field), **every**
   container and initContainer must supply the field and it must match.
+
+> **Note:** `allowPrivilegeEscalation` is enforced as a [hardcoded constraint](#hardcoded-security-constraints) (always `false`) rather than a configurable namespace annotation.
 
 ### `sc.dsmlp.ucsd.edu/fsGroup`
 
@@ -260,9 +261,13 @@ kubectl apply -f deploy/webhook.yaml
 2. **New string constraint type** (e.g. glob matching) — create
    `app/constraints/glob.py` with a `GlobConstraintParser` and register it.
 
-3. **New annotation key** — add entries to both:
+3. **New ConstraintSet-based annotation key** — add entries to both:
    - `app/constraints/registry.py` → `CONSTRAINT_REGISTRY`
    - `app/validator.py` → `_FIELD_SPECS`
+
+4. **New annotation-driven constraint that doesn't fit the ConstraintSet model** (e.g. glob
+   patterns, structured values) — implement a dedicated validation function in `app/validator.py`
+   and call it from `validate_pod()`, following the pattern of `_validate_nfs_volumes()`.
 
 ---
 
