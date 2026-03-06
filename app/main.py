@@ -30,7 +30,7 @@ from .models import (
     AdmissionReviewResponse,
     StatusDetails,
 )
-from .mutator import mutate_pod
+from .mutator import mutate_pod, mutate_pod_spec
 from .namespace_client import get_namespace_security_annotations
 from .validator import validate_pod
 
@@ -54,6 +54,53 @@ app = FastAPI(
     ),
     version="1.0.0",
 )
+
+
+# ---------------------------------------------------------------------------
+# Workload support
+# ---------------------------------------------------------------------------
+
+# Maps a workload kind to the key path leading to its pod template spec.
+# The path ends at the pod template's "spec" dict (i.e. the container list lives here).
+_WORKLOAD_TEMPLATE_PATHS: dict[str, tuple[str, ...]] = {
+    "Deployment":  ("spec", "template", "spec"),
+    "ReplicaSet":  ("spec", "template", "spec"),
+    "StatefulSet": ("spec", "template", "spec"),
+    "DaemonSet":   ("spec", "template", "spec"),
+    "Job":         ("spec", "template", "spec"),
+    "CronJob":     ("spec", "jobTemplate", "spec", "template", "spec"),
+}
+
+
+def _get_template_spec(obj: dict[str, Any], path: tuple[str, ...]) -> dict[str, Any] | None:
+    """Walk *path* through *obj* and return the nested dict, or None if missing."""
+    node: Any = obj
+    for key in path:
+        if not isinstance(node, dict):
+            return None
+        node = node.get(key)
+        if not node:
+            return None
+    return node if isinstance(node, dict) else None
+
+
+def _template_spec_pointer(path: tuple[str, ...]) -> str:
+    """Return the JSON Pointer prefix for the pod template spec (e.g. /spec/template/spec)."""
+    return "/" + "/".join(path)
+
+
+def _rewrite_patch_paths(
+    patches: list[dict[str, Any]], template_spec_ptr: str
+) -> list[dict[str, Any]]:
+    """Rewrite patches produced by mutate_pod (rooted at /spec) to be rooted at *template_spec_ptr*.
+
+    Example: /spec/securityContext → /spec/template/spec/securityContext
+    """
+    prefix = "/spec"
+    return [
+        {**p, "path": template_spec_ptr + p["path"][len(prefix):]}
+        for p in patches
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -99,7 +146,14 @@ async def healthz() -> dict[str, str]:
 
 @app.post("/validate")
 async def validate(request: Request) -> Response:
-    """ValidatingAdmissionWebhook endpoint."""
+    """ValidatingAdmissionWebhook endpoint.
+
+    Handles Pod resources directly and also validates the pod templates
+    embedded in workload resources (Deployment, ReplicaSet, StatefulSet,
+    DaemonSet, Job, CronJob).  For workloads, namespace defaults are applied
+    to the template spec via the mutator before validation so that the
+    validator sees the same spec the API server would ultimately use.
+    """
     review = await _parse_admission_review(request)
 
     if review.request is None:
@@ -107,39 +161,52 @@ async def validate(request: Request) -> Response:
 
     req = review.request
     uid = req.uid
+    kind = req.kind.kind
 
-    # Only handle Pod resources; allow everything else through
-    if req.kind.kind != "Pod":
-        logger.debug("Allowing non-Pod resource kind=%s uid=%s", req.kind.kind, uid)
+    # Determine whether this is a Pod or a supported workload kind
+    template_path = _WORKLOAD_TEMPLATE_PATHS.get(kind)
+    is_pod = kind == "Pod"
+
+    if not is_pod and template_path is None:
+        logger.debug("Allowing unsupported resource kind=%s uid=%s", kind, uid)
         return _json_response(_allow(uid))
 
     # Namespace is required for policy look-up
     namespace = req.namespace
     if not namespace:
         return _json_response(
-            _deny(uid, "Pod has no namespace; cannot determine security policy.")
+            _deny(uid, f"{kind} has no namespace; cannot determine security policy.")
         )
 
-    # Pod spec is required
-    pod_object = req.object or {}
-    pod_spec: dict[str, Any] = pod_object.get("spec") or {}
-    if not pod_spec:
-        return _json_response(_deny(uid, "AdmissionRequest contains no pod spec."))
+    obj = req.object or {}
+
+    if is_pod:
+        pod_spec: dict[str, Any] = obj.get("spec") or {}
+        if not pod_spec:
+            return _json_response(_deny(uid, "AdmissionRequest contains no pod spec."))
+    else:
+        pod_spec = _get_template_spec(obj, template_path) or {}  # type: ignore[arg-type]
+        if not pod_spec:
+            logger.debug(
+                "Allowing %s uid=%s: pod template spec not found or empty", kind, uid
+            )
+            return _json_response(_allow(uid))
 
     # Fetch namespace security annotations
     ns_annotations = get_namespace_security_annotations(namespace)
-    logger.debug(
-        "Namespace %r annotations: %s", namespace, ns_annotations
-    )
+    logger.debug("Namespace %r annotations: %s", namespace, ns_annotations)
+
+    # For workloads, apply mutations so the validator sees post-mutation defaults
+    if not is_pod:
+        pod_spec = mutate_pod_spec(ns_annotations, pod_spec)
 
     # Validate
     result = validate_pod(ns_annotations, pod_spec)
 
     if result.allowed:
         logger.info(
-            "Allowing pod uid=%s in namespace=%s (all constraints satisfied)",
-            uid,
-            namespace,
+            "Allowing %s uid=%s in namespace=%s (all constraints satisfied)",
+            kind, uid, namespace,
         )
         return _json_response(_allow(uid))
 
@@ -179,10 +246,14 @@ async def _parse_admission_review(request: Request) -> AdmissionReview:
 async def mutate(request: Request) -> Response:
     """MutatingAdmissionWebhook endpoint.
 
-    Attempts to patch the pod spec toward compliance using the namespace's
-    ``sc.dsmlp.ucsd.edu/default.*`` annotations.  Always returns
-    ``allowed: true``; non-compliant pods that could not be fully remediated
-    are left for the ValidatingAdmissionWebhook to reject.
+    Attempts to patch the pod spec (or workload pod template) toward compliance
+    using the namespace's ``sc.dsmlp.ucsd.edu/default.*`` annotations.  Always
+    returns ``allowed: true``; non-compliant resources that could not be fully
+    remediated are left for the ValidatingAdmissionWebhook to reject.
+
+    Handles Pod resources directly and also mutates the pod templates embedded
+    in Deployment, ReplicaSet, StatefulSet, DaemonSet, Job, and CronJob objects.
+    For workloads the patch paths are rewritten to target the template spec.
     """
     review = await _parse_admission_review(request)
 
@@ -191,26 +262,38 @@ async def mutate(request: Request) -> Response:
 
     req = review.request
     uid = req.uid
+    kind = req.kind.kind
 
-    # Pass non-Pod resources through without modification
-    if req.kind.kind != "Pod":
+    template_path = _WORKLOAD_TEMPLATE_PATHS.get(kind)
+    is_pod = kind == "Pod"
+
+    # Pass unsupported resource kinds through without modification
+    if not is_pod and template_path is None:
         return _json_response(_allow(uid))
 
     namespace = req.namespace
-    pod_object = req.object or {}
-    pod_spec: dict[str, Any] = pod_object.get("spec") or {}
+    obj = req.object or {}
+
+    if is_pod:
+        pod_spec: dict[str, Any] = obj.get("spec") or {}
+    else:
+        pod_spec = _get_template_spec(obj, template_path) or {}  # type: ignore[arg-type]
 
     if not namespace or not pod_spec:
-        # Nothing useful to mutate; validator will handle rejection
+        # Nothing useful to mutate; validator will handle rejection if needed
         return _json_response(_allow(uid))
 
     ns_annotations = get_namespace_security_annotations(namespace)
     patches = mutate_pod(ns_annotations, pod_spec)
 
+    if not is_pod and patches:
+        # Rewrite patch paths from /spec/... to the workload template spec path
+        patches = _rewrite_patch_paths(patches, _template_spec_pointer(template_path))  # type: ignore[arg-type]
+
     if patches:
         logger.info(
-            "Mutating pod uid=%s in namespace=%s: %d patch operation(s)",
-            uid, namespace, len(patches),
+            "Mutating %s uid=%s in namespace=%s: %d patch operation(s)",
+            kind, uid, namespace, len(patches),
         )
         logger.debug(
             "Mutating pod uid=%s in namespace=%s: %d patch operation(s): %s",
