@@ -360,12 +360,19 @@ def _validate_volume_types(
     pod_spec: dict[str, Any],
     namespace_annotations: dict[str, str],
 ) -> list[str]:
-    """Validate that all pod volumes use permitted types.
+    """Validate volume types and env/envFrom sources against the prohibitedVolumeTypes annotation.
 
-    The base permitted set is _ALLOWED_VOLUME_TYPES.  The namespace annotation
-    sc.dsmlp.ucsd.edu/prohibitedVolumeTypes may further restrict it by listing
-    comma-separated type names to remove.  A missing or empty annotation means
+    The base permitted volume type set is _ALLOWED_VOLUME_TYPES.  The namespace
+    annotation sc.dsmlp.ucsd.edu/prohibitedVolumeTypes may further restrict it by
+    listing comma-separated type names to remove.  A missing or empty annotation means
     no additional restrictions beyond the base set.
+
+    When a type is prohibited, the corresponding env/envFrom sources are also blocked
+    across all containers, initContainers, and ephemeralContainers:
+
+      configMap   → env[].valueFrom.configMapKeyRef, envFrom[].configMapRef
+      secret      → env[].valueFrom.secretKeyRef,    envFrom[].secretRef
+      downwardAPI → env[].valueFrom.fieldRef,         env[].valueFrom.resourceFieldRef
 
     Type names in the annotation that are not in the base permitted set are
     ignored (with a warning), since they were never allowed to begin with.
@@ -385,6 +392,8 @@ def _validate_volume_types(
     effective_allowed = _ALLOWED_VOLUME_TYPES - prohibited
 
     errors: list[str] = []
+
+    # Volume type check
     for volume in pod_spec.get("volumes") or []:
         vol_name = volume.get("name", "<unnamed>")
         disallowed_types = [k for k in volume if k != "name" and k not in effective_allowed]
@@ -393,6 +402,51 @@ def _validate_volume_types(
                 f"Volume {vol_name!r} uses disallowed type {vol_type!r}; "
                 f"permitted types: {sorted(effective_allowed)}"
             )
+
+    # Env / envFrom source checks
+    if prohibited:
+        for container in _all_containers(pod_spec):
+            cname = _container_name(container)
+
+            for env_entry in container.get("env") or []:
+                value_from = env_entry.get("valueFrom") or {}
+                env_name = env_entry.get("name", "<unnamed>")
+
+                if "configMap" in prohibited and "configMapKeyRef" in value_from:
+                    errors.append(
+                        f"Container {cname!r} env var {env_name!r} uses configMapKeyRef; "
+                        f"configMap access is prohibited in this namespace"
+                    )
+                if "secret" in prohibited and "secretKeyRef" in value_from:
+                    errors.append(
+                        f"Container {cname!r} env var {env_name!r} uses secretKeyRef; "
+                        f"secret access is prohibited in this namespace"
+                    )
+                if "downwardAPI" in prohibited:
+                    if "fieldRef" in value_from:
+                        errors.append(
+                            f"Container {cname!r} env var {env_name!r} uses fieldRef "
+                            f"(downward API); downwardAPI access is prohibited in this namespace"
+                        )
+                    if "resourceFieldRef" in value_from:
+                        errors.append(
+                            f"Container {cname!r} env var {env_name!r} uses resourceFieldRef "
+                            f"(downward API); downwardAPI access is prohibited in this namespace"
+                        )
+
+            for ef in container.get("envFrom") or []:
+                if "configMap" in prohibited and "configMapRef" in ef:
+                    ref_name = (ef["configMapRef"] or {}).get("name", "<unnamed>")
+                    errors.append(
+                        f"Container {cname!r} envFrom uses configMapRef {ref_name!r}; "
+                        f"configMap access is prohibited in this namespace"
+                    )
+                if "secret" in prohibited and "secretRef" in ef:
+                    ref_name = (ef["secretRef"] or {}).get("name", "<unnamed>")
+                    errors.append(
+                        f"Container {cname!r} envFrom uses secretRef {ref_name!r}; "
+                        f"secret access is prohibited in this namespace"
+                    )
 
     return errors
 
