@@ -291,6 +291,7 @@ def _validate_hardcoded_constraints(pod_spec: dict[str, Any]) -> list[str]:
     """Enforce security constraints that apply to every pod, regardless of namespace annotations.
 
     Pod-level:
+      - hostNetwork, hostPID, hostIPC must each be absent or false.
       - securityContext.sysctls must be absent or empty.
 
     Per container (containers, initContainers, ephemeralContainers):
@@ -303,6 +304,14 @@ def _validate_hardcoded_constraints(pod_spec: dict[str, Any]) -> list[str]:
     applies the sc.dsmlp.ucsd.edu/prohibitedVolumeTypes namespace annotation.
     """
     errors: list[str] = []
+
+    # Pod-level: host namespaces
+    for field in ("hostNetwork", "hostPID", "hostIPC"):
+        value = pod_spec.get(field)
+        if value is not None and value is not False:
+            errors.append(
+                f"Pod {field} must be absent or false; found {value!r}"
+            )
 
     # Pod-level: sysctls
     pod_sc = _pod_sc(pod_spec)

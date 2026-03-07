@@ -541,6 +541,61 @@ class TestHardcodedConstraints:
         assert "sysctls" in result.message
 
     # ------------------------------------------------------------------ #
+    # hostNetwork / hostPID / hostIPC (pod-level)
+    # ------------------------------------------------------------------ #
+
+    def test_host_network_absent_ok(self):
+        spec = _pod(pod_sc={"runAsUser": 1000})
+        assert validate_pod(_ALWAYS_ANNOTATIONS, spec).allowed is True
+
+    def test_host_network_false_ok(self):
+        spec = {**_pod(pod_sc={"runAsUser": 1000}), "hostNetwork": False}
+        assert validate_pod(_ALWAYS_ANNOTATIONS, spec).allowed is True
+
+    def test_host_network_true_rejected(self):
+        spec = {**_pod(pod_sc={"runAsUser": 1000}), "hostNetwork": True}
+        result = validate_pod(_ALWAYS_ANNOTATIONS, spec)
+        assert result.allowed is False
+        assert "hostNetwork" in result.message
+
+    def test_host_pid_absent_ok(self):
+        spec = _pod(pod_sc={"runAsUser": 1000})
+        assert validate_pod(_ALWAYS_ANNOTATIONS, spec).allowed is True
+
+    def test_host_pid_false_ok(self):
+        spec = {**_pod(pod_sc={"runAsUser": 1000}), "hostPID": False}
+        assert validate_pod(_ALWAYS_ANNOTATIONS, spec).allowed is True
+
+    def test_host_pid_true_rejected(self):
+        spec = {**_pod(pod_sc={"runAsUser": 1000}), "hostPID": True}
+        result = validate_pod(_ALWAYS_ANNOTATIONS, spec)
+        assert result.allowed is False
+        assert "hostPID" in result.message
+
+    def test_host_ipc_absent_ok(self):
+        spec = _pod(pod_sc={"runAsUser": 1000})
+        assert validate_pod(_ALWAYS_ANNOTATIONS, spec).allowed is True
+
+    def test_host_ipc_false_ok(self):
+        spec = {**_pod(pod_sc={"runAsUser": 1000}), "hostIPC": False}
+        assert validate_pod(_ALWAYS_ANNOTATIONS, spec).allowed is True
+
+    def test_host_ipc_true_rejected(self):
+        spec = {**_pod(pod_sc={"runAsUser": 1000}), "hostIPC": True}
+        result = validate_pod(_ALWAYS_ANNOTATIONS, spec)
+        assert result.allowed is False
+        assert "hostIPC" in result.message
+
+    def test_multiple_host_fields_all_errors_reported(self):
+        """All three violations should be reported in a single rejection."""
+        spec = {**_pod(pod_sc={"runAsUser": 1000}), "hostNetwork": True, "hostPID": True, "hostIPC": True}
+        result = validate_pod(_ALWAYS_ANNOTATIONS, spec)
+        assert result.allowed is False
+        assert "hostNetwork" in result.message
+        assert "hostPID" in result.message
+        assert "hostIPC" in result.message
+
+    # ------------------------------------------------------------------ #
     # Applies to initContainers and ephemeralContainers too
     # ------------------------------------------------------------------ #
 
