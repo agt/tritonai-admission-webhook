@@ -35,8 +35,12 @@ for rejecting any values that violate policy.
    tolerations (optional default injection)
      If sc.dsmlp.ucsd.edu/default.tolerations is present on the namespace,
      its value is parsed as a comma-separated list of "key=value:effect" tokens
-     and injected into pod.spec.tolerations only when that field is absent or
-     empty.  A value of "*" for the toleration value produces operator "Exists";
+     and injected when the pod carries no user-defined tolerations.
+     Tolerations whose key is in the node.kubernetes.io/* namespace are
+     considered system-managed (added automatically by Kubernetes for node
+     conditions) and are ignored when deciding whether defaults should be
+     applied; they are preserved in the final list, with defaults appended.
+     A value of "*" for the toleration value produces operator "Exists";
      any other value produces operator "Equal".
 
 Returns a (possibly empty) list of RFC 6902 JSON Patch operations.  The caller
@@ -49,7 +53,7 @@ import copy
 import logging
 from typing import Any
 
-from .validator import FieldBehavior, _FIELD_SPECS
+from .validator import FieldBehavior, _FIELD_SPECS, _is_node_kubernetes_toleration
 
 logger = logging.getLogger(__name__)
 
@@ -309,22 +313,29 @@ def _mutate_tolerations(
     ns_annotations: dict[str, str],
     patches: list[dict[str, Any]],
 ) -> None:
-    """Inject default tolerations when the pod has none and the default annotation is set.
+    """Inject default tolerations when the pod has no user-defined tolerations.
 
-    Only fires when ``sc.dsmlp.ucsd.edu/default.tolerations`` is present **and**
-    the pod's ``tolerations`` field is absent or an empty list.  Existing
-    tolerations (any non-empty list) are left untouched.
+    Fires when ``sc.dsmlp.ucsd.edu/default.tolerations`` is present **and** the
+    pod's toleration list contains no toleration outside the ``node.kubernetes.io/*``
+    key namespace (which Kubernetes itself adds automatically for node conditions).
+
+    When ``node.kubernetes.io/*`` tolerations are present they are preserved; the
+    defaults are appended after them so the resulting list contains both.
     """
     default_key = f"{DEFAULT_ANNOTATION_PREFIX}tolerations"
     if default_key not in ns_annotations:
         return
 
-    if pod.get("tolerations"):  # non-empty list → leave untouched
+    existing: list[dict[str, Any]] = pod.get("tolerations") or []
+    node_k8s = [t for t in existing if _is_node_kubernetes_toleration(t)]
+    custom = [t for t in existing if not _is_node_kubernetes_toleration(t)]
+
+    if custom:  # pod already has user-defined tolerations → leave untouched
         return
 
     raw = ns_annotations[default_key].strip()
     try:
-        tolerations = _parse_default_tolerations(raw)
+        defaults = _parse_default_tolerations(raw)
     except ValueError as exc:
         logger.warning(
             "Cannot parse default annotation %r=%r: %s; skipping toleration injection.",
@@ -332,11 +343,12 @@ def _mutate_tolerations(
         )
         return
 
-    pod["tolerations"] = tolerations
+    new_tolerations = node_k8s + defaults
+    pod["tolerations"] = new_tolerations
     patches.append({
         "op": "add",
         "path": "/spec/tolerations",
-        "value": tolerations,
+        "value": new_tolerations,
     })
 
 

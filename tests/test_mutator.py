@@ -519,8 +519,8 @@ class TestMutateTolerations:
             {"key": "glean-node", "operator": "Exists", "effect": "NoExecute"},
         ]
 
-    def test_no_injection_when_tolerations_already_present(self):
-        """Existing non-empty tolerations are left untouched."""
+    def test_no_injection_when_custom_tolerations_already_present(self):
+        """Existing non-node.kubernetes.io/* tolerations prevent injection."""
         annotations = {TOLERATION_ANNOTATION: "node-type=its-ai:NoSchedule"}
         spec = _pod(pod_sc={"runAsNonRoot": True})
         spec["tolerations"] = [{"key": "other", "operator": "Exists", "effect": "NoSchedule"}]
@@ -535,6 +535,39 @@ class TestMutateTolerations:
         patches = mutate_pod(annotations, spec)
         p = _patch_at(patches, "/spec/tolerations")
         assert p is not None
+
+    def test_injection_when_only_node_kubernetes_tolerations_present(self):
+        """node.kubernetes.io/* tolerations are ignored when deciding to inject defaults."""
+        annotations = {TOLERATION_ANNOTATION: "node-type=its-ai:NoSchedule"}
+        sys_tol = {"key": "node.kubernetes.io/not-ready", "operator": "Exists", "effect": "NoExecute"}
+        spec = _pod(pod_sc={"runAsNonRoot": True})
+        spec["tolerations"] = [sys_tol]
+        patches = mutate_pod(annotations, spec)
+        p = _patch_at(patches, "/spec/tolerations")
+        assert p is not None
+
+    def test_node_kubernetes_tolerations_preserved_alongside_injected_defaults(self):
+        """Existing node.kubernetes.io/* tolerations appear before the injected defaults."""
+        annotations = {TOLERATION_ANNOTATION: "node-type=its-ai:NoSchedule"}
+        sys_tol = {"key": "node.kubernetes.io/not-ready", "operator": "Exists", "effect": "NoExecute"}
+        spec = _pod(pod_sc={"runAsNonRoot": True})
+        spec["tolerations"] = [sys_tol]
+        patches = mutate_pod(annotations, spec)
+        p = _patch_at(patches, "/spec/tolerations")
+        assert p is not None
+        injected = {"key": "node-type", "operator": "Equal", "value": "its-ai", "effect": "NoSchedule"}
+        assert p["value"] == [sys_tol, injected]
+
+    def test_no_injection_when_custom_and_node_kubernetes_tolerations_mixed(self):
+        """A custom toleration alongside node.kubernetes.io/* tolerations blocks injection."""
+        annotations = {TOLERATION_ANNOTATION: "node-type=its-ai:NoSchedule"}
+        spec = _pod(pod_sc={"runAsNonRoot": True})
+        spec["tolerations"] = [
+            {"key": "node.kubernetes.io/not-ready", "operator": "Exists", "effect": "NoExecute"},
+            {"key": "other", "operator": "Equal", "value": "x", "effect": "NoSchedule"},
+        ]
+        patches = mutate_pod(annotations, spec)
+        assert _patch_at(patches, "/spec/tolerations") is None
 
     def test_no_injection_when_annotation_absent(self):
         """No default.tolerations annotation → no toleration patch."""

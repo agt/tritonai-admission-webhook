@@ -568,6 +568,17 @@ def _validate_nfs_volumes(
 _TOLERATIONS_KEY = "sc.dsmlp.ucsd.edu/tolerations"
 
 
+def _is_node_kubernetes_toleration(tol: dict[str, Any]) -> bool:
+    """Return True if the toleration key is in the node.kubernetes.io/* namespace.
+
+    Kubernetes itself adds these tolerations automatically for node conditions
+    (e.g. node.kubernetes.io/not-ready, node.kubernetes.io/unreachable).
+    They are always considered implicitly permitted and are never injected as
+    user-configurable defaults.
+    """
+    return tol.get("key", "").startswith("node.kubernetes.io/")
+
+
 def _parse_permitted_tolerations(raw: str) -> list[tuple[str, str, str]]:
     """Parse the tolerations annotation into (key_pattern, value_pattern, effect_pattern) tuples.
 
@@ -624,7 +635,9 @@ def _validate_tolerations(
     """Validate pod tolerations against the sc.dsmlp.ucsd.edu/tolerations annotation.
 
     Annotation absent → no restriction; any (or no) tolerations are permitted.
-    Annotation present → every pod toleration must match at least one permitted entry.
+    Annotation present → every pod toleration must match at least one permitted entry,
+    EXCEPT that ``node.kubernetes.io/*`` tolerations are always implicitly permitted
+    and are never required to appear in the annotation.
     Each permitted entry may use fnmatch-style globs in any field.
     A value pattern of ``"*"`` additionally covers the ``Exists`` operator (no value).
     """
@@ -643,6 +656,8 @@ def _validate_tolerations(
 
     errors: list[str] = []
     for tol in tolerations:
+        if _is_node_kubernetes_toleration(tol):
+            continue  # always implicitly permitted
         if not any(_toleration_permitted(tol, kp, vp, ep) for kp, vp, ep in permitted):
             errors.append(
                 f"Pod toleration {tol!r} is not permitted by "
