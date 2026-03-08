@@ -221,25 +221,63 @@ SG_ANNOTATIONS = {
     "sc.dsmlp.ucsd.edu/default.supplementalGroups": "1000",
 }
 
+SG_ANNOTATIONS_MULTI = {
+    "sc.dsmlp.ucsd.edu/supplementalGroups": "1000,2000-3000",
+    "sc.dsmlp.ucsd.edu/default.supplementalGroups": "1000,2022,3900",
+}
+
 
 class TestMutateSupplementalGroups:
 
-    def test_no_patches_when_absent(self):
+    def test_injects_default_when_absent(self):
+        """supplementalGroups absent → inject pod-level default."""
         spec = _pod(pod_sc={"runAsNonRoot": True})
-        assert mutate_pod(SG_ANNOTATIONS, spec) == []
+        patches = mutate_pod(SG_ANNOTATIONS, spec)
+        p = _patch_at(patches, "/spec/securityContext/supplementalGroups")
+        assert p is not None
+        assert p["op"] == "add"
+        assert p["value"] == [1000]
 
-    def test_no_patches_when_empty_list(self):
+    def test_injects_default_when_empty_list(self):
+        """Empty supplementalGroups list is treated as absent — default injected."""
         spec = _pod(pod_sc={"supplementalGroups": [], "runAsNonRoot": True})
-        assert mutate_pod(SG_ANNOTATIONS, spec) == []
+        patches = mutate_pod(SG_ANNOTATIONS, spec)
+        p = _patch_at(patches, "/spec/securityContext/supplementalGroups")
+        assert p is not None
+        assert p["value"] == [1000]
 
-    def test_no_patches_when_all_conforming(self):
+    def test_injects_multi_value_default(self):
+        """Comma-separated default parsed as a list of ints."""
+        spec = _pod(pod_sc={"runAsNonRoot": True})
+        patches = mutate_pod(SG_ANNOTATIONS_MULTI, spec)
+        p = _patch_at(patches, "/spec/securityContext/supplementalGroups")
+        assert p is not None
+        assert p["value"] == [1000, 2022, 3900]
+
+    def test_creates_pod_sc_when_absent(self):
+        """No pod SC at all → pod SC created with supplementalGroups."""
+        spec = _pod()
+        patches = mutate_pod(SG_ANNOTATIONS, spec)
+        p = _patch_at(patches, "/spec/securityContext")
+        assert p is not None
+        assert p["op"] == "add"
+        assert p["value"]["supplementalGroups"] == [1000]
+
+    def test_no_patches_when_already_set(self):
+        """Non-empty supplementalGroups already present → left untouched."""
         spec = _pod(pod_sc={"supplementalGroups": [1000, 2500], "runAsNonRoot": True})
         assert mutate_pod(SG_ANNOTATIONS, spec) == []
 
-    def test_no_patches_when_non_conforming(self):
+    def test_no_patches_when_non_conforming_already_set(self):
         # Non-conforming values are left for the validator to reject.
         spec = _pod(pod_sc={"supplementalGroups": [1000, 9999], "runAsNonRoot": True})
         assert mutate_pod(SG_ANNOTATIONS, spec) == []
+
+    def test_no_patches_when_no_constraint_annotation(self):
+        """default.supplementalGroups present but no constraint annotation → no injection."""
+        annotations = {"sc.dsmlp.ucsd.edu/default.supplementalGroups": "1000"}
+        spec = _pod(pod_sc={"runAsNonRoot": True})
+        assert mutate_pod(annotations, spec) == []
 
 
 # ---------------------------------------------------------------------------

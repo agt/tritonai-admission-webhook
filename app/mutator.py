@@ -11,8 +11,15 @@ for rejecting any values that violate policy.
      The pod-level securityContext is patched (or created from scratch) to
      supply the default for any container that does not carry the field itself.
 
-   OPTIONAL_SCALAR fields (fsGroup) and OPTIONAL_LIST fields (supplementalGroups)
-     Absent is always acceptable for these fields, so no default is injected.
+   OPTIONAL_SCALAR fields (fsGroup)
+     Absent is always acceptable; no default is injected.
+
+   OPTIONAL_LIST fields (supplementalGroups)
+     If sc.dsmlp.ucsd.edu/default.supplementalGroups is present, its value is
+     parsed as a comma-separated list of integers (e.g. "1000,2022,3900" or a
+     single value "1000") and injected into pod.spec.securityContext.supplementalGroups
+     only when that field is absent or an empty list.  Any existing non-empty
+     list is left untouched.
 
    NODE_SELECTOR (nodeLabel)
      • pod.spec.nodeName is always removed — it unconditionally bypasses nodeSelector.
@@ -93,7 +100,12 @@ def _parse_default(
     raw = ns_annotations[default_key].strip()
 
     try:
-        if field_name in ("runAsUser", "runAsGroup", "fsGroup", "supplementalGroups"):
+        if field_name == "supplementalGroups":
+            values = [int(v.strip()) for v in raw.split(",") if v.strip()]
+            if not values:
+                raise ValueError("empty supplementalGroups default")
+            return values
+        elif field_name in ("runAsUser", "runAsGroup", "fsGroup"):
             return int(raw)
         elif field_name == "nodeLabel":
             if "=" not in raw:
@@ -165,6 +177,38 @@ def _mutate_required_scalar(
                 "path": "/spec/securityContext",
                 "value": {field_name: default_value},
             })
+
+
+def _mutate_optional_list(
+    field_name: str,
+    pod: dict[str, Any],
+    default_value: list[Any],
+    patches: list[dict[str, Any]],
+) -> None:
+    """Supply a pod-level default for OPTIONAL_LIST fields when absent or empty.
+
+    These fields (e.g. supplementalGroups) live only in the pod-level
+    securityContext.  Injects the default when the field is absent or an empty
+    list; any existing non-empty list is left untouched.
+    """
+    pod_sc: dict[str, Any] | None = pod.get("securityContext")
+
+    if pod_sc is not None:
+        if pod_sc.get(field_name):  # non-None, non-empty → leave untouched
+            return
+        pod_sc[field_name] = default_value
+        patches.append({
+            "op": "add",
+            "path": _ptr("spec", "securityContext", field_name),
+            "value": default_value,
+        })
+    else:
+        pod["securityContext"] = {field_name: default_value}
+        patches.append({
+            "op": "add",
+            "path": "/spec/securityContext",
+            "value": {field_name: default_value},
+        })
 
 
 def _mutate_run_as_non_root(
@@ -299,6 +343,7 @@ def _mutate_tolerations(
 # Dispatch table: FieldBehavior → mutator function (excludes NODE_SELECTOR)
 _SC_MUTATORS = {
     FieldBehavior.REQUIRED_SCALAR: _mutate_required_scalar,
+    FieldBehavior.OPTIONAL_LIST: _mutate_optional_list,
 }
 
 
