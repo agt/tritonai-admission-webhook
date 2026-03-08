@@ -221,25 +221,63 @@ SG_ANNOTATIONS = {
     "sc.dsmlp.ucsd.edu/default.supplementalGroups": "1000",
 }
 
+SG_ANNOTATIONS_MULTI = {
+    "sc.dsmlp.ucsd.edu/supplementalGroups": "1000,2000-3000",
+    "sc.dsmlp.ucsd.edu/default.supplementalGroups": "1000,2022,3900",
+}
+
 
 class TestMutateSupplementalGroups:
 
-    def test_no_patches_when_absent(self):
+    def test_injects_default_when_absent(self):
+        """supplementalGroups absent → inject pod-level default."""
         spec = _pod(pod_sc={"runAsNonRoot": True})
-        assert mutate_pod(SG_ANNOTATIONS, spec) == []
+        patches = mutate_pod(SG_ANNOTATIONS, spec)
+        p = _patch_at(patches, "/spec/securityContext/supplementalGroups")
+        assert p is not None
+        assert p["op"] == "add"
+        assert p["value"] == [1000]
 
-    def test_no_patches_when_empty_list(self):
+    def test_injects_default_when_empty_list(self):
+        """Empty supplementalGroups list is treated as absent — default injected."""
         spec = _pod(pod_sc={"supplementalGroups": [], "runAsNonRoot": True})
-        assert mutate_pod(SG_ANNOTATIONS, spec) == []
+        patches = mutate_pod(SG_ANNOTATIONS, spec)
+        p = _patch_at(patches, "/spec/securityContext/supplementalGroups")
+        assert p is not None
+        assert p["value"] == [1000]
 
-    def test_no_patches_when_all_conforming(self):
+    def test_injects_multi_value_default(self):
+        """Comma-separated default parsed as a list of ints."""
+        spec = _pod(pod_sc={"runAsNonRoot": True})
+        patches = mutate_pod(SG_ANNOTATIONS_MULTI, spec)
+        p = _patch_at(patches, "/spec/securityContext/supplementalGroups")
+        assert p is not None
+        assert p["value"] == [1000, 2022, 3900]
+
+    def test_creates_pod_sc_when_absent(self):
+        """No pod SC at all → pod SC created with supplementalGroups."""
+        spec = _pod()
+        patches = mutate_pod(SG_ANNOTATIONS, spec)
+        p = _patch_at(patches, "/spec/securityContext")
+        assert p is not None
+        assert p["op"] == "add"
+        assert p["value"]["supplementalGroups"] == [1000]
+
+    def test_no_patches_when_already_set(self):
+        """Non-empty supplementalGroups already present → left untouched."""
         spec = _pod(pod_sc={"supplementalGroups": [1000, 2500], "runAsNonRoot": True})
         assert mutate_pod(SG_ANNOTATIONS, spec) == []
 
-    def test_no_patches_when_non_conforming(self):
+    def test_no_patches_when_non_conforming_already_set(self):
         # Non-conforming values are left for the validator to reject.
         spec = _pod(pod_sc={"supplementalGroups": [1000, 9999], "runAsNonRoot": True})
         assert mutate_pod(SG_ANNOTATIONS, spec) == []
+
+    def test_no_patches_when_no_constraint_annotation(self):
+        """default.supplementalGroups present but no constraint annotation → no injection."""
+        annotations = {"sc.dsmlp.ucsd.edu/default.supplementalGroups": "1000"}
+        spec = _pod(pod_sc={"runAsNonRoot": True})
+        assert mutate_pod(annotations, spec) == []
 
 
 # ---------------------------------------------------------------------------
@@ -481,8 +519,8 @@ class TestMutateTolerations:
             {"key": "glean-node", "operator": "Exists", "effect": "NoExecute"},
         ]
 
-    def test_no_injection_when_tolerations_already_present(self):
-        """Existing non-empty tolerations are left untouched."""
+    def test_no_injection_when_custom_tolerations_already_present(self):
+        """Existing non-node.kubernetes.io/* tolerations prevent injection."""
         annotations = {TOLERATION_ANNOTATION: "node-type=its-ai:NoSchedule"}
         spec = _pod(pod_sc={"runAsNonRoot": True})
         spec["tolerations"] = [{"key": "other", "operator": "Exists", "effect": "NoSchedule"}]
@@ -497,6 +535,39 @@ class TestMutateTolerations:
         patches = mutate_pod(annotations, spec)
         p = _patch_at(patches, "/spec/tolerations")
         assert p is not None
+
+    def test_injection_when_only_node_kubernetes_tolerations_present(self):
+        """node.kubernetes.io/* tolerations are ignored when deciding to inject defaults."""
+        annotations = {TOLERATION_ANNOTATION: "node-type=its-ai:NoSchedule"}
+        sys_tol = {"key": "node.kubernetes.io/not-ready", "operator": "Exists", "effect": "NoExecute"}
+        spec = _pod(pod_sc={"runAsNonRoot": True})
+        spec["tolerations"] = [sys_tol]
+        patches = mutate_pod(annotations, spec)
+        p = _patch_at(patches, "/spec/tolerations")
+        assert p is not None
+
+    def test_node_kubernetes_tolerations_preserved_alongside_injected_defaults(self):
+        """Existing node.kubernetes.io/* tolerations appear before the injected defaults."""
+        annotations = {TOLERATION_ANNOTATION: "node-type=its-ai:NoSchedule"}
+        sys_tol = {"key": "node.kubernetes.io/not-ready", "operator": "Exists", "effect": "NoExecute"}
+        spec = _pod(pod_sc={"runAsNonRoot": True})
+        spec["tolerations"] = [sys_tol]
+        patches = mutate_pod(annotations, spec)
+        p = _patch_at(patches, "/spec/tolerations")
+        assert p is not None
+        injected = {"key": "node-type", "operator": "Equal", "value": "its-ai", "effect": "NoSchedule"}
+        assert p["value"] == [sys_tol, injected]
+
+    def test_no_injection_when_custom_and_node_kubernetes_tolerations_mixed(self):
+        """A custom toleration alongside node.kubernetes.io/* tolerations blocks injection."""
+        annotations = {TOLERATION_ANNOTATION: "node-type=its-ai:NoSchedule"}
+        spec = _pod(pod_sc={"runAsNonRoot": True})
+        spec["tolerations"] = [
+            {"key": "node.kubernetes.io/not-ready", "operator": "Exists", "effect": "NoExecute"},
+            {"key": "other", "operator": "Equal", "value": "x", "effect": "NoSchedule"},
+        ]
+        patches = mutate_pod(annotations, spec)
+        assert _patch_at(patches, "/spec/tolerations") is None
 
     def test_no_injection_when_annotation_absent(self):
         """No default.tolerations annotation → no toleration patch."""

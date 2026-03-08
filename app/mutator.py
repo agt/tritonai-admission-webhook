@@ -11,8 +11,15 @@ for rejecting any values that violate policy.
      The pod-level securityContext is patched (or created from scratch) to
      supply the default for any container that does not carry the field itself.
 
-   OPTIONAL_SCALAR fields (fsGroup) and OPTIONAL_LIST fields (supplementalGroups)
-     Absent is always acceptable for these fields, so no default is injected.
+   OPTIONAL_SCALAR fields (fsGroup)
+     Absent is always acceptable; no default is injected.
+
+   OPTIONAL_LIST fields (supplementalGroups)
+     If sc.dsmlp.ucsd.edu/default.supplementalGroups is present, its value is
+     parsed as a comma-separated list of integers (e.g. "1000,2022,3900" or a
+     single value "1000") and injected into pod.spec.securityContext.supplementalGroups
+     only when that field is absent or an empty list.  Any existing non-empty
+     list is left untouched.
 
    NODE_SELECTOR (nodeLabel)
      • pod.spec.nodeName is always removed — it unconditionally bypasses nodeSelector.
@@ -28,8 +35,12 @@ for rejecting any values that violate policy.
    tolerations (optional default injection)
      If sc.dsmlp.ucsd.edu/default.tolerations is present on the namespace,
      its value is parsed as a comma-separated list of "key=value:effect" tokens
-     and injected into pod.spec.tolerations only when that field is absent or
-     empty.  A value of "*" for the toleration value produces operator "Exists";
+     and injected when the pod carries no user-defined tolerations.
+     Tolerations whose key is in the node.kubernetes.io/* namespace are
+     considered system-managed (added automatically by Kubernetes for node
+     conditions) and are ignored when deciding whether defaults should be
+     applied; they are preserved in the final list, with defaults appended.
+     A value of "*" for the toleration value produces operator "Exists";
      any other value produces operator "Equal".
 
 Returns a (possibly empty) list of RFC 6902 JSON Patch operations.  The caller
@@ -42,7 +53,7 @@ import copy
 import logging
 from typing import Any
 
-from .validator import FieldBehavior, _FIELD_SPECS
+from .validator import FieldBehavior, _FIELD_SPECS, _is_node_kubernetes_toleration
 
 logger = logging.getLogger(__name__)
 
@@ -93,7 +104,12 @@ def _parse_default(
     raw = ns_annotations[default_key].strip()
 
     try:
-        if field_name in ("runAsUser", "runAsGroup", "fsGroup", "supplementalGroups"):
+        if field_name == "supplementalGroups":
+            values = [int(v.strip()) for v in raw.split(",") if v.strip()]
+            if not values:
+                raise ValueError("empty supplementalGroups default")
+            return values
+        elif field_name in ("runAsUser", "runAsGroup", "fsGroup"):
             return int(raw)
         elif field_name == "nodeLabel":
             if "=" not in raw:
@@ -165,6 +181,38 @@ def _mutate_required_scalar(
                 "path": "/spec/securityContext",
                 "value": {field_name: default_value},
             })
+
+
+def _mutate_optional_list(
+    field_name: str,
+    pod: dict[str, Any],
+    default_value: list[Any],
+    patches: list[dict[str, Any]],
+) -> None:
+    """Supply a pod-level default for OPTIONAL_LIST fields when absent or empty.
+
+    These fields (e.g. supplementalGroups) live only in the pod-level
+    securityContext.  Injects the default when the field is absent or an empty
+    list; any existing non-empty list is left untouched.
+    """
+    pod_sc: dict[str, Any] | None = pod.get("securityContext")
+
+    if pod_sc is not None:
+        if pod_sc.get(field_name):  # non-None, non-empty → leave untouched
+            return
+        pod_sc[field_name] = default_value
+        patches.append({
+            "op": "add",
+            "path": _ptr("spec", "securityContext", field_name),
+            "value": default_value,
+        })
+    else:
+        pod["securityContext"] = {field_name: default_value}
+        patches.append({
+            "op": "add",
+            "path": "/spec/securityContext",
+            "value": {field_name: default_value},
+        })
 
 
 def _mutate_run_as_non_root(
@@ -265,22 +313,29 @@ def _mutate_tolerations(
     ns_annotations: dict[str, str],
     patches: list[dict[str, Any]],
 ) -> None:
-    """Inject default tolerations when the pod has none and the default annotation is set.
+    """Inject default tolerations when the pod has no user-defined tolerations.
 
-    Only fires when ``sc.dsmlp.ucsd.edu/default.tolerations`` is present **and**
-    the pod's ``tolerations`` field is absent or an empty list.  Existing
-    tolerations (any non-empty list) are left untouched.
+    Fires when ``sc.dsmlp.ucsd.edu/default.tolerations`` is present **and** the
+    pod's toleration list contains no toleration outside the ``node.kubernetes.io/*``
+    key namespace (which Kubernetes itself adds automatically for node conditions).
+
+    When ``node.kubernetes.io/*`` tolerations are present they are preserved; the
+    defaults are appended after them so the resulting list contains both.
     """
     default_key = f"{DEFAULT_ANNOTATION_PREFIX}tolerations"
     if default_key not in ns_annotations:
         return
 
-    if pod.get("tolerations"):  # non-empty list → leave untouched
+    existing: list[dict[str, Any]] = pod.get("tolerations") or []
+    node_k8s = [t for t in existing if _is_node_kubernetes_toleration(t)]
+    custom = [t for t in existing if not _is_node_kubernetes_toleration(t)]
+
+    if custom:  # pod already has user-defined tolerations → leave untouched
         return
 
     raw = ns_annotations[default_key].strip()
     try:
-        tolerations = _parse_default_tolerations(raw)
+        defaults = _parse_default_tolerations(raw)
     except ValueError as exc:
         logger.warning(
             "Cannot parse default annotation %r=%r: %s; skipping toleration injection.",
@@ -288,17 +343,19 @@ def _mutate_tolerations(
         )
         return
 
-    pod["tolerations"] = tolerations
+    new_tolerations = node_k8s + defaults
+    pod["tolerations"] = new_tolerations
     patches.append({
         "op": "add",
         "path": "/spec/tolerations",
-        "value": tolerations,
+        "value": new_tolerations,
     })
 
 
 # Dispatch table: FieldBehavior → mutator function (excludes NODE_SELECTOR)
 _SC_MUTATORS = {
     FieldBehavior.REQUIRED_SCALAR: _mutate_required_scalar,
+    FieldBehavior.OPTIONAL_LIST: _mutate_optional_list,
 }
 
 

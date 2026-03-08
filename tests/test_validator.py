@@ -1333,3 +1333,34 @@ class TestValidateTolerations:
         result = validate_pod(anns, _tol_spec(tol))
         assert result.allowed is False
         assert "malformed" in result.message.lower()
+
+    # node.kubernetes.io/* implicit allowlist
+    def test_node_kubernetes_toleration_always_permitted_without_annotation(self):
+        """node.kubernetes.io/* tolerations pass even when no tolerations annotation exists."""
+        tol = {"key": "node.kubernetes.io/not-ready", "operator": "Exists", "effect": "NoExecute"}
+        result = validate_pod(_TOL_ANNOTATIONS_BASE, _tol_spec(tol))
+        assert result.allowed is True
+
+    def test_node_kubernetes_toleration_always_permitted_with_annotation(self):
+        """node.kubernetes.io/* tolerations pass even when the annotation doesn't cover them."""
+        anns = {**_TOL_ANNOTATIONS_BASE, _TOL_KEY: "node-type=its-ai:NoSchedule"}
+        tol = {"key": "node.kubernetes.io/unreachable", "operator": "Exists", "effect": "NoExecute"}
+        result = validate_pod(anns, _tol_spec(tol))
+        assert result.allowed is True
+
+    def test_node_kubernetes_toleration_exempt_while_custom_is_still_checked(self):
+        """node.kubernetes.io/* toleration is exempt; any other toleration is still validated."""
+        anns = {**_TOL_ANNOTATIONS_BASE, _TOL_KEY: "node-type=its-ai:NoSchedule"}
+        sys_tol = {"key": "node.kubernetes.io/not-ready", "operator": "Exists", "effect": "NoExecute"}
+        bad_tol = {"key": "other", "operator": "Equal", "value": "x", "effect": "NoSchedule"}
+        result = validate_pod(anns, _tol_spec(sys_tol, bad_tol))
+        assert result.allowed is False
+        assert "other" in result.message
+
+    def test_node_kubernetes_toleration_exempt_alongside_permitted_custom(self):
+        """Mix of node.kubernetes.io/* and an explicitly-permitted toleration is allowed."""
+        anns = {**_TOL_ANNOTATIONS_BASE, _TOL_KEY: "node-type=its-ai:NoSchedule"}
+        sys_tol = {"key": "node.kubernetes.io/not-ready", "operator": "Exists", "effect": "NoExecute"}
+        ok_tol = {"key": "node-type", "operator": "Equal", "value": "its-ai", "effect": "NoSchedule"}
+        result = validate_pod(anns, _tol_spec(sys_tol, ok_tol))
+        assert result.allowed is True
