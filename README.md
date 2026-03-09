@@ -3,13 +3,13 @@
 
 A FastAPI-based Kubernetes Pod admission webhook which offers fine-grained control over workloads' security configuration while minimizing modifications to published YAML or Helm files and no dependencies on external systems: defaults and constraints are established through namespace Annotations.
 
-
 - **Mutating webhook** (`/mutate`) — called first by the API server to inject optional defaults for fields later inspected by the Validator.
 
 - **Validating webhook** (`/validate`) — rejects pods which violate either namespace-specific policies or a list of hardcoded rules aligned to [Kubernetes Pod Security Standards](https://kubernetes.io/docs/concepts/security/pod-security-standards/).  For workload resources (Deployment, ReplicaSet, StatefulSet, DaemonSet, Job, and CronJob objects), namespace defaults are applied to the pod template spec via the mutator before validation so the validator sees the same (post-mutation) spec the API server would ultimately use.  The intent is to reject nonconforming workloads as early as possbile.
 
 Beyond controlling Pod `securityContext` fields (`runAsUser`, etc.), defaults/constraints on `nodeSelectors` and `tolerations` enable Pods to be directed to specific node groups or excluded from them, and data security is enhanced through restrictions on permitted Volume types and allowable NFS servers/paths.
 
+These protections provide enhanced isolation for TritonAI/TritonGPT workloads executing within a mixed-tenant cluster.
 
 ### Example Namespace Annotations:
 ```yaml
