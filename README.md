@@ -296,6 +296,7 @@ Validation webhook.  They are not configurable via namespace annotations.
 | `securityContext.privileged` | absent or `false` |
 | `securityContext.capabilities.add` | absent, empty, or `["NET_BIND_SERVICE"]` only |
 | `securityContext.procMount` | absent, `""`, or `"Default"` |
+| `ports[*].hostPort` | absent or `0` |
 
 Any violation is reported as a validation error and the pod is rejected.
 
@@ -316,7 +317,7 @@ The table below maps this webhook's hardcoded constraints against the Kubernetes
 | Capabilities (`drop`) | — | Must include `ALL` | Not enforced |
 | HostPath volumes | ✗ disallowed | ✗ disallowed | **Enforced** — via allowed volume type set |
 | Volume types | — | Restricted set | **Enforced** — hardcoded allowed set (further narrowable by annotation) |
-| Host ports | ✗ disallowed | ✗ disallowed | Not enforced |
+| Host ports | ✗ disallowed | ✗ disallowed | **Enforced** — hardcoded: `hostPort` must be absent or `0` |
 | `/proc` mount type | Default only | Default only | **Enforced** — must be absent, `""`, or `"Default"` |
 | Sysctls | Safe sysctls only | Safe sysctls only | **Enforced** — all sysctls disallowed |
 | AppArmor | No custom profiles | No custom profiles | Not enforced |
@@ -453,7 +454,7 @@ This section maps the webhook's hardcoded constraints and configurable namespace
 | Privileged Containers | `spec.containers[*].securityContext.privileged`, init/ephemeral containers | `undefined/nil`, `false` | ✅ Enforced | Hardcoded: `privileged` must be absent or `false`. |
 | Capabilities (`add`) | `spec.containers[*].securityContext.capabilities.add`, init/ephemeral containers | `undefined/nil`, or one of 14 named capabilities | ✅ Stricter | Only `NET_BIND_SERVICE` may appear in `capabilities.add`. Baseline permits 13 additional capabilities (e.g. `CHOWN`, `KILL`, `SETUID`); the webhook rejects them all. `capabilities.drop` is not checked (required only by Restricted). |
 | HostPath Volumes | `spec.volumes[*].hostPath` | `undefined/nil` | ✅ Enforced | `hostPath` is absent from the hardcoded allowed volume-type set; hostPath volumes are always rejected. |
-| Host Ports | `spec.containers[*].ports[*].hostPort`, init/ephemeral containers | `undefined/nil`, `0` | ❌ Not enforced | Container port bindings to the host are not validated. |
+| Host Ports | `spec.containers[*].ports[*].hostPort`, init/ephemeral containers | `undefined/nil`, `0` | ✅ Enforced | Hardcoded: `hostPort` must be absent or `0` across all container types. |
 | Host Probes / Lifecycle Hooks (v1.34+) | `httpGet.host` and `tcpSocket.host` on liveness/readiness/startup probes and lifecycle hooks | `undefined/nil`, `""` | ❌ Not enforced | Probe and lifecycle hook `host` fields are not inspected. |
 | AppArmor | `spec.securityContext.appArmorProfile.type`, `spec.containers[*].securityContext.appArmorProfile.type`, init/ephemeral containers; `metadata.annotations["container.apparmor.security.beta.kubernetes.io/*"]` | `undefined/nil`, `RuntimeDefault`, `Localhost` | ❌ Not enforced | AppArmor profile type is not checked; `Unconfined` or arbitrary custom profiles are not blocked. |
 | SELinux | `seLinuxOptions.type` (pod & all containers); `seLinuxOptions.user`, `seLinuxOptions.role` (pod & all containers) | type: `undefined/""`, `container_t`, `container_init_t`, `container_kvm_t`, `container_engine_t`; user/role: `undefined/""` | ❌ Not enforced | SELinux type, user, and role fields are not inspected. |
@@ -481,11 +482,10 @@ Restricted is cumulative — it includes all Baseline controls above, plus the f
 
 ### Summary
 
-**Baseline:** The webhook natively satisfies six Baseline controls — host namespaces, privileged containers, hostPath volumes, `/proc` mount type, sysctls, and capabilities — and is in fact stricter than Baseline on both capabilities and sysctls. The following Baseline controls are **not addressed** and would require new validation logic:
+**Baseline:** The webhook natively satisfies seven Baseline controls — host namespaces, privileged containers, hostPath volumes, host ports, `/proc` mount type, sysctls, and capabilities — and is in fact stricter than Baseline on both capabilities and sysctls. The following Baseline controls are **not addressed** and would require new validation logic:
 
 - AppArmor and SELinux profile restrictions
 - Seccomp (blocking `Unconfined`)
-- Host ports
 - Host probes and lifecycle hook `host` fields
 - HostProcess (Windows)
 
