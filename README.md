@@ -10,15 +10,13 @@ _Note (agt): this validator was built via Claude Code, with prompts as outlined 
 A FastAPI-based Kubernetes Pod admission webhook with two components:
 
 - **Mutating webhook** (`/mutate`) — fills in missing security-related fields with namespace-specific defaults before a pod is admitted.
-- **Validating webhook** (`/validate`) — rejects pods which violate namespace-specific policies and/or a set of hardcoded rules
+- **Validating webhook** (`/validate`) — rejects pods which violate either namespace-specific policies or a list of hardcoded rules aligned to [Kubernetes Pod Security Standards](https://kubernetes.io/docs/concepts/security/pod-security-standards/)
 
 Both webhooks handle **Pod** resources directly and also inspect the pod templates
 embedded in **Deployment**, **ReplicaSet**, **StatefulSet**, **DaemonSet**, **Job**, and **CronJob** objects.
 All other resource kinds are passed through without inspection.
 
-A note for UCSD: these TritonGPT/TritonAI webhooks use namespace annotations to establish desired policy and defaults for that namespace.  This is in contrast to `dsmlp-validator` and `dsmlp-mutator` which queries user/course settings from the SICad/awsed database.
-
-Both sets of webhooks can operate simultaneously within the cluster, with namespace labels determining which is invoked.  In theory, a namespace could subject its pods to both regimes.
+A note for UCSD: these TritonGPT/TritonAI webhooks use namespace annotations to establish desired policy and defaults for that namespace.  This is in contrast to `dsmlp-validator` and `dsmlp-mutator` which queries user/course settings from the SICad/awsed database.  Both sets of webhooks can operate simultaneously within the cluster, with namespace labels determining which is invoked.  In theory, a namespace could subject its pods to both regimes.
 
 ---
 
@@ -26,12 +24,12 @@ Both sets of webhooks can operate simultaneously within the cluster, with namesp
 
 ### Mutating webhook (`/mutate`)
 
-Called first by the API server.  As a webhook, handles Pod resources only, but 
+Called first by the API server (prior to Validator.)  As a webhook, handles Pod resources only, but 
 is used internal to the Validator when processing Deployment, ReplicaSet, StatefulSet, DaemonSet, Job, and CronJob objects.
 
-For each active constraint annotation on the pod's namespace:
+The webook:
 
-1. Looks up the corresponding `sc.dsmlp.ucsd.edu/default.<field>` annotation.
+1. Fetches `sc.dsmlp.ucsd.edu/default.*` annotations from the Pod's **namespace**.
 2. For **REQUIRED_SCALAR** fields (`runAsUser`, `runAsGroup`):
    injects a pod-level `securityContext` default for any container that does not already
    set the field.  Fields that are already set are **not modified**.
@@ -45,16 +43,18 @@ For each active constraint annotation on the pod's namespace:
    is absent.  Existing values (including `false`) are left untouched so the validator
    can reject them.
 6. For **tolerations** (`default.tolerations`): if the pod's `spec.tolerations` field is
-   absent or empty, injects the default toleration list from the annotation.  Any existing
-   tolerations (non-empty list) are left untouched.
-
+   absent or empty (Kubernetes-internal tolerations ignored), adds in the default toleration list from the annotation.
+   
 ### Validating webhook (`/validate`)
 
-Called after mutation.  Handles Pod resources as well as the pod templates of
+Called after mutation, enforces namespace-specific constraints along with a set of static rules.
+
+Handles Pod resources as well as the pod templates of workload resources:
 Deployment, ReplicaSet, StatefulSet, DaemonSet, Job, and CronJob objects.
+
 For workload resources, namespace defaults are applied to the pod template
 spec via the mutator before validation so the validator sees the same
-(post-mutation) spec the API server would ultimately use.
+(post-mutation) spec the API server would ultimately use.  The intent is to reject nonconforming workloads as early as possbile.
 
 The webhook:
 
@@ -69,8 +69,12 @@ The webhook:
 ## Namespace Annotations
 
 Set security policy on a namespace by adding annotations prefixed `sc.dsmlp.ucsd.edu/`.
-Pair each constraint annotation with a `sc.dsmlp.ucsd.edu/default.<field>` annotation to
-enable the mutating webhook to fill in missing values automatically.
+
+For the most part, constraint annotations are paired with a corresponding default annotation to
+enable the mutating webhook to fill in missing values automatically.  (Defaults are also injected
+to satistfy hard-coded rules.)
+
+This behavior is intended to permit fine-grained control over workloads' security configuration without requiring modification of published YAML or Helm files.
 
 ```yaml
 apiVersion: v1
@@ -96,8 +100,10 @@ metadata:
     sc.dsmlp.ucsd.edu/prohibitedVolumeTypes: "emptyDir,secret"
 ```
 
-Default annotations are only consulted by the mutator and must satisfy the corresponding
-constraint.  If a default annotation is absent or unparseable, the mutator logs a warning
+Default annotations consulted only by the mutator, and still must satisfy the corresponding
+constraint.  (It is possible to set defaults which do not pass Validator checks.)
+
+If a default annotation is absent or unparseable, the mutator logs a warning
 and skips that field; the validator still enforces the constraint.
 
 ### Constraint Value Syntax
@@ -156,8 +162,6 @@ Globs (`fnmatch` style) may appear in **any** field (key, value, or effect).  Th
 - If the Pod-level `securityContext` is **absent** (or does not set the field), **every**
   container and initContainer must supply the field and it must match.
 
-> **Note:** `allowPrivilegeEscalation` is enforced as a [hardcoded constraint](#hardcoded-security-constraints) (always `false`) rather than a configurable namespace annotation.
-
 ### `sc.dsmlp.ucsd.edu/fsGroup`
 
 **Optional field** — only pod-level:
@@ -170,7 +174,7 @@ Globs (`fnmatch` style) may appear in **any** field (key, value, or effect).  Th
 **Optional list** — only pod-level:
 
 - Absent or empty → constraint satisfied.
-- Present → **every element** must satisfy at least one constraint token.
+- Present → **every element** must satisfy at least one constraint token; that is the Pod spec must specify groups which are equal to or a subset of the constraint.
 
 ### `sc.dsmlp.ucsd.edu/nodeLabel`
 
@@ -178,6 +182,7 @@ Globs (`fnmatch` style) may appear in **any** field (key, value, or effect).  Th
 
 - `pod.spec.nodeName` must be **absent**.  Setting `nodeName` bypasses the scheduler and
   the `nodeSelector` check entirely, so it is never permitted when this annotation is present.
+  
 - `pod.spec.nodeSelector` must contain at least one entry matching **any** of the
   annotation's `key=value` tokens.  Additional `nodeSelector` entries beyond the matched
   one are permitted.
@@ -200,7 +205,7 @@ Example — namespace annotation `"rack=b,rack=c"` would:
 - If the annotation is **present**, every toleration on the pod must be covered by at least one
   permitted entry in the comma-separated list.
 - Each permitted entry is `key=value:effect`.  Any field may contain **fnmatch-style globs**.
-- A value of `*` additionally matches tolerations that use `operator: Exists` (which have no `value` field).
+- A entry's value element set to `*` matches any `operator: Equals` toleration as well as tolerations using `operator: Exists` (which have no `value` field).
 - Pods with no tolerations always pass regardless of this annotation.
 
 ```
@@ -218,8 +223,8 @@ sc.dsmlp.ucsd.edu/tolerations: "node-type=its-ai*:NoSchedule,glean-node=*:NoExec
 
 Used by the **mutator** only.  Same `key=value:effect` format (no globs — these are concrete values).
 
-- Injected into `spec.tolerations` only when the pod's toleration list is **absent or empty**.
-- If value is `*`, the injected toleration uses `operator: Exists` (no `value` field).
+- Injected into `spec.tolerations` only when the pod's toleration list is **absent or empty**. (Kubernetes-internal tolerations ignored when deciding whether to inject.)
+- If an entry's `value` is `*`, the injected toleration uses `operator: Exists` (no `value` field).
 - Otherwise the injected toleration uses `operator: Equal`.
 
 ```
@@ -270,7 +275,7 @@ sc.dsmlp.ucsd.edu/prohibitedVolumeTypes: "emptyDir,secret"
 ## Hardcoded Security Constraints
 
 The following constraints are **always enforced** on every pod that passes through the
-webhook.  They are not configurable via namespace annotations.
+Validation webhook.  They are not configurable via namespace annotations.
 
 ### Pod-level
 
@@ -324,7 +329,7 @@ The table below maps this webhook's hardcoded constraints against the Kubernetes
 
 **Summary:** the hardcoded constraints satisfy every control in the PSS **Restricted**
 profile that is expressible at the pod/container securityContext level, except for
-`capabilities.drop ALL`, seccomp, AppArmor, SELinux, hostProcess, and host-ports
+`capabilities.drop ALL` (but .add is restricted), seccomp, AppArmor, SELinux, hostProcess (Windows-only), and host-ports
 checks, which are not currently enforced.
 
 ---
