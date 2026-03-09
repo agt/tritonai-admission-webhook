@@ -8,9 +8,7 @@ A FastAPI-based Kubernetes Pod admission webhook which offers fine-grained contr
 
 - **Validating webhook** (`/validate`) — rejects pods which violate either namespace-specific policies or a list of hardcoded rules aligned to [Kubernetes Pod Security Standards](https://kubernetes.io/docs/concepts/security/pod-security-standards/).  For workload resources (Deployment, ReplicaSet, StatefulSet, DaemonSet, Job, and CronJob objects), namespace defaults are applied to the pod template spec via the mutator before validation so the validator sees the same (post-mutation) spec the API server would ultimately use.  The intent is to reject nonconforming workloads as early as possbile.
 
-Beyond controlling Pod `securityContext` fields (`runAsUser`, etc.), defaults/constraints on `nodeSelectors` and `tolerations` enable Pods to be directed towards specific node groups or excluded from them.
-
-Finally, data accessible to Pods in the namespace may be constrained through limits on Volume types and allowable NFS servers/paths.
+Beyond controlling Pod `securityContext` fields (`runAsUser`, etc.), defaults/constraints on `nodeSelectors` and `tolerations` enable Pods to be directed to specific node groups or excluded from them, and data security is enhanced through restrictions on permitted Volume types and allowable NFS servers/paths.
 
 
 ### Example Namespace Annotations:
