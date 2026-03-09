@@ -5,13 +5,15 @@ Applies per-namespace security constraints to an incoming Pod spec.
 
 Validation rules per annotation
 ────────────────────────────────
-sc.dsmlp.ucsd.edu/runAsUser          →  REQUIRED_SCALAR  (see below)
-sc.dsmlp.ucsd.edu/runAsGroup         →  REQUIRED_SCALAR
+<PREFIX>/policy.runAsUser          →  REQUIRED_SCALAR  (see below)
+<PREFIX>/policy.runAsGroup         →  REQUIRED_SCALAR
 
-sc.dsmlp.ucsd.edu/fsGroup            →  OPTIONAL_SCALAR  (pod-level only in k8s)
-sc.dsmlp.ucsd.edu/supplementalGroups →  OPTIONAL_LIST    (pod-level only in k8s)
-sc.dsmlp.ucsd.edu/nodeLabel          →  NODE_SELECTOR    (see below)
-sc.dsmlp.ucsd.edu/tolerations        →  TOLERATION_ALLOWLIST (see below)
+<PREFIX>/policy.fsGroup            →  OPTIONAL_SCALAR  (pod-level only in k8s)
+<PREFIX>/policy.supplementalGroups →  OPTIONAL_LIST    (pod-level only in k8s)
+<PREFIX>/policy.nodeLabel          →  NODE_SELECTOR    (see below)
+<PREFIX>/policy.tolerations        →  TOLERATION_ALLOWLIST (see below)
+
+Where <PREFIX> is the ANNOTATION_PREFIX env var (default: tritonai-admission-webhook).
 
 NODE_SELECTOR semantics
   - pod.spec.nodeName must be absent (bypassing nodeSelector is not permitted).
@@ -50,6 +52,7 @@ from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Any, Callable
 
+from .config import ANNOTATION_NS, POLICY_PREFIX
 from .constraints.base import ConstraintSet
 from .constraints.registry import CONSTRAINT_REGISTRY, parse_annotation
 
@@ -111,7 +114,7 @@ class FieldSpec:
     extract: Callable[[dict[str, Any]], Any]
 
 
-# Maps annotation key suffix (after "sc.dsmlp.ucsd.edu/") to its FieldSpec
+# Maps annotation key suffix (after POLICY_PREFIX) to its FieldSpec
 _FIELD_SPECS: dict[str, FieldSpec] = {
     "runAsUser": FieldSpec(
         display_name="runAsUser",
@@ -244,7 +247,7 @@ def _validate_node_selector(
     pod_spec: dict[str, Any],
     constraint_set: ConstraintSet,
 ) -> list[str]:
-    """Validate NODE_SELECTOR behavior for sc.dsmlp.ucsd.edu/nodeLabel.
+    """Validate NODE_SELECTOR behavior for the nodeLabel annotation.
 
     Rules:
     1. pod.spec.nodeName must be absent — direct node binding bypasses nodeSelector.
@@ -255,7 +258,7 @@ def _validate_node_selector(
     node_name = pod_spec.get("nodeName")
     if node_name:
         errors.append(
-            f"Pod must not set nodeName when sc.dsmlp.ucsd.edu/nodeLabel is "
+            f"Pod must not set nodeName when {POLICY_PREFIX}nodeLabel is "
             f"enforced by the namespace; found nodeName={node_name!r}"
         )
 
@@ -316,7 +319,7 @@ def _validate_hardcoded_constraints(pod_spec: dict[str, Any]) -> list[str]:
       - ports[*].hostPort must be absent or 0.
 
     Volume type checking is handled separately by _validate_volume_types(), which also
-    applies the sc.dsmlp.ucsd.edu/prohibitedVolumeTypes namespace annotation.
+    applies the prohibitedVolumeTypes namespace annotation.
     """
     errors: list[str] = []
 
@@ -430,7 +433,7 @@ def _validate_run_as_non_root(pod_spec: dict[str, Any]) -> list[str]:
 # Volume type constraint (hardcoded base set + optional namespace restriction)
 # ---------------------------------------------------------------------------
 
-_PROHIBITED_VOLUME_TYPES_KEY = "sc.dsmlp.ucsd.edu/prohibitedVolumeTypes"
+_PROHIBITED_VOLUME_TYPES_KEY = f"{POLICY_PREFIX}prohibitedVolumeTypes"
 
 
 def _validate_volume_types(
@@ -440,9 +443,9 @@ def _validate_volume_types(
     """Validate volume types and env/envFrom sources against the prohibitedVolumeTypes annotation.
 
     The base permitted volume type set is _ALLOWED_VOLUME_TYPES.  The namespace
-    annotation sc.dsmlp.ucsd.edu/prohibitedVolumeTypes may further restrict it by
-    listing comma-separated type names to remove.  A missing or empty annotation means
-    no additional restrictions beyond the base set.
+    annotation prohibitedVolumeTypes may further restrict it by listing comma-separated
+    type names to remove.  A missing or empty annotation means no additional restrictions
+    beyond the base set.
 
     When a type is prohibited, the corresponding env/envFrom sources are also blocked
     across all containers, initContainers, and ephemeralContainers:
@@ -532,7 +535,7 @@ def _validate_volume_types(
 # NFS volume annotation constraint
 # ---------------------------------------------------------------------------
 
-_NFS_ANNOTATION_KEY = "sc.dsmlp.ucsd.edu/allowedNfsVolumes"
+_NFS_ANNOTATION_KEY = f"{POLICY_PREFIX}allowedNfsVolumes"
 
 
 def _validate_nfs_volumes(
@@ -574,7 +577,7 @@ def _validate_nfs_volumes(
 # Toleration allowlist constraint (annotation-driven)
 # ---------------------------------------------------------------------------
 
-_TOLERATIONS_KEY = "sc.dsmlp.ucsd.edu/tolerations"
+_TOLERATIONS_KEY = f"{POLICY_PREFIX}tolerations"
 
 
 def _is_node_kubernetes_toleration(tol: dict[str, Any]) -> bool:
@@ -641,7 +644,7 @@ def _validate_tolerations(
     pod_spec: dict[str, Any],
     namespace_annotations: dict[str, str],
 ) -> list[str]:
-    """Validate pod tolerations against the sc.dsmlp.ucsd.edu/tolerations annotation.
+    """Validate pod tolerations against the tolerations annotation.
 
     Annotation absent → no restriction; any (or no) tolerations are permitted.
     Annotation present → every pod toleration must match at least one permitted entry,
@@ -699,8 +702,8 @@ def validate_pod(
     Parameters
     ----------
     namespace_annotations:
-        The ``sc.dsmlp.ucsd.edu/*`` annotations scraped from the pod's namespace.
-        Keys are full annotation strings (e.g. ``"sc.dsmlp.ucsd.edu/runAsUser"``).
+        The ``<ANNOTATION_PREFIX>/*`` annotations scraped from the pod's namespace.
+        Keys are full annotation strings (e.g. ``"tritonai-admission-webhook/policy.runAsUser"``).
     pod_spec:
         The ``spec`` sub-dict from the Pod's ``object`` in the AdmissionRequest.
 
@@ -733,7 +736,7 @@ def validate_pod(
         return ValidationResult(
             allowed=False,
             errors=[
-                "Pod rejected: the namespace has no sc.dsmlp.ucsd.edu/* annotations; "
+                f"Pod rejected: the namespace has no {ANNOTATION_NS}policy.* annotations; "
                 "security policy must be explicitly defined."
             ],
         )
@@ -741,7 +744,7 @@ def validate_pod(
     # Apply each active constraint
     all_errors: list[str] = []
     for annotation_key, constraint_set in active_constraints.items():
-        field_suffix = annotation_key.split("/", 1)[1]  # e.g. "runAsUser"
+        field_suffix = annotation_key.removeprefix(POLICY_PREFIX)  # e.g. "runAsUser"
         spec = _FIELD_SPECS.get(field_suffix)
         if spec is None:
             logger.warning("No FieldSpec registered for annotation key %r; skipping", annotation_key)

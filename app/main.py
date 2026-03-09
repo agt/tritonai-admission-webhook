@@ -6,7 +6,7 @@ Endpoints:
   POST /validate  ValidatingAdmissionWebhook — rejects non-compliant pods
 
 The mutating webhook runs first and attempts to bring pods into compliance
-using per-namespace default annotations (sc.dsmlp.ucsd.edu/default.*).
+using per-namespace default annotations (<ANNOTATION_PREFIX>/default.*).
 The API server then re-runs the (possibly mutated) pod through the validating
 webhook, which performs the final accept/reject decision.
 
@@ -50,7 +50,7 @@ app = FastAPI(
     title="TritonAI Pod Security Admission Webhooks",
     description=(
         "Mutating + Validating admission webhooks enforcing per-namespace "
-        "sc.dsmlp.ucsd.edu/* security policy."
+        "per-namespace security policy."
     ),
     version="1.0.0",
 )

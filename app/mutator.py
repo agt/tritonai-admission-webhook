@@ -2,10 +2,10 @@
 Core pod mutation logic for the MutatingAdmissionWebhook.
 
 For each active constraint annotation on the namespace, the mutator reads the
-corresponding default annotation (sc.dsmlp.ucsd.edu/default.<field>) and applies
-it only where the relevant field is **absent** (empty).  Fields that are already
-set are left untouched — the downstream ValidatingAdmissionWebhook is responsible
-for rejecting any values that violate policy.
+corresponding default annotation (<DEFAULT_PREFIX><field>) and applies it only
+where the relevant field is **absent** (empty).  Fields that are already set are
+left untouched — the downstream ValidatingAdmissionWebhook is responsible for
+rejecting any values that violate policy.
 
    REQUIRED_SCALAR fields (runAsUser, runAsGroup)
      The pod-level securityContext is patched (or created from scratch) to
@@ -15,11 +15,11 @@ for rejecting any values that violate policy.
      Absent is always acceptable; no default is injected.
 
    OPTIONAL_LIST fields (supplementalGroups)
-     If sc.dsmlp.ucsd.edu/default.supplementalGroups is present, its value is
-     parsed as a comma-separated list of integers (e.g. "1000,2022,3900" or a
-     single value "1000") and injected into pod.spec.securityContext.supplementalGroups
-     only when that field is absent or an empty list.  Any existing non-empty
-     list is left untouched.
+     If <DEFAULT_PREFIX>supplementalGroups is present, its value is parsed as a
+     comma-separated list of integers (e.g. "1000,2022,3900" or a single value
+     "1000") and injected into pod.spec.securityContext.supplementalGroups only
+     when that field is absent or an empty list.  Any existing non-empty list is
+     left untouched.
 
    NODE_SELECTOR (nodeLabel)
      • pod.spec.nodeName is always removed — it unconditionally bypasses nodeSelector.
@@ -33,9 +33,9 @@ for rejecting any values that violate policy.
      downstream validator can reject them.
 
    tolerations (optional default injection)
-     If sc.dsmlp.ucsd.edu/default.tolerations is present on the namespace,
-     its value is parsed as a comma-separated list of "key=value:effect" tokens
-     and injected when the pod carries no user-defined tolerations.
+     If <DEFAULT_PREFIX>tolerations is present on the namespace, its value is
+     parsed as a comma-separated list of "key=value:effect" tokens and injected
+     when the pod carries no user-defined tolerations.
      Tolerations whose key is in the node.kubernetes.io/* namespace are
      considered system-managed (added automatically by Kubernetes for node
      conditions) and are ignored when deciding whether defaults should be
@@ -53,11 +53,10 @@ import copy
 import logging
 from typing import Any
 
+from .config import DEFAULT_PREFIX, POLICY_PREFIX
 from .validator import FieldBehavior, _FIELD_SPECS, _is_node_kubernetes_toleration
 
 logger = logging.getLogger(__name__)
-
-DEFAULT_ANNOTATION_PREFIX = "sc.dsmlp.ucsd.edu/default."
 
 
 # ---------------------------------------------------------------------------
@@ -91,7 +90,7 @@ def _parse_default(
     - the default annotation is absent from the namespace, or
     - the raw string cannot be parsed for the field type.
     """
-    default_key = f"{DEFAULT_ANNOTATION_PREFIX}{field_name}"
+    default_key = f"{DEFAULT_PREFIX}{field_name}"
 
     if default_key not in ns_annotations:
         logger.warning(
@@ -248,7 +247,7 @@ def _mutate_node_selector(
     default_label: tuple[str, str] | None,
     patches: list[dict[str, Any]],
 ) -> None:
-    """Mutate pod scheduling fields when sc.dsmlp.ucsd.edu/nodeLabel is active.
+    """Mutate pod scheduling fields when nodeLabel is active.
 
     • nodeName is always removed — it unconditionally bypasses nodeSelector.
     • The default key=value label is injected only when nodeSelector is completely
@@ -315,14 +314,14 @@ def _mutate_tolerations(
 ) -> None:
     """Inject default tolerations when the pod has no user-defined tolerations.
 
-    Fires when ``sc.dsmlp.ucsd.edu/default.tolerations`` is present **and** the
+    Fires when ``<DEFAULT_PREFIX>tolerations`` is present **and** the
     pod's toleration list contains no toleration outside the ``node.kubernetes.io/*``
     key namespace (which Kubernetes itself adds automatically for node conditions).
 
     When ``node.kubernetes.io/*`` tolerations are present they are preserved; the
     defaults are appended after them so the resulting list contains both.
     """
-    default_key = f"{DEFAULT_ANNOTATION_PREFIX}tolerations"
+    default_key = f"{DEFAULT_PREFIX}tolerations"
     if default_key not in ns_annotations:
         return
 
@@ -373,8 +372,8 @@ def _compute_mutations(
     Parameters
     ----------
     namespace_annotations:
-        All ``sc.dsmlp.ucsd.edu/*`` annotations scraped from the pod's namespace,
-        including both constraint annotations and ``default.*`` annotations.
+        All ``<ANNOTATION_PREFIX>/*`` annotations scraped from the pod's namespace,
+        including both policy.* constraint annotations and default.* annotations.
     pod_spec:
         The ``spec`` sub-dict from the Pod's AdmissionRequest object.
 
@@ -392,7 +391,7 @@ def _compute_mutations(
         if mutator is None:
             continue  # OPTIONAL_SCALAR and OPTIONAL_LIST fields have no mutations; NODE_SELECTOR handled below
 
-        annotation_key = f"sc.dsmlp.ucsd.edu/{field_suffix}"
+        annotation_key = f"{POLICY_PREFIX}{field_suffix}"
         if annotation_key not in namespace_annotations:
             continue
 
@@ -403,7 +402,7 @@ def _compute_mutations(
         mutator(field_suffix, pod, default_value, patches)
 
     # --- nodeLabel (NODE_SELECTOR) ---
-    node_label_key = "sc.dsmlp.ucsd.edu/nodeLabel"
+    node_label_key = f"{POLICY_PREFIX}nodeLabel"
     if node_label_key in namespace_annotations:
         nl_default = _parse_default("nodeLabel", node_label_key, namespace_annotations)
         _mutate_node_selector(pod, nl_default, patches)

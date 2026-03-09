@@ -37,7 +37,7 @@ def _review(
     }
 
 
-NS_ANNOTATIONS = {"sc.dsmlp.ucsd.edu/runAsUser": "1000"}
+NS_ANNOTATIONS = {"tritonai-admission-webhook/policy.runAsUser": "1000"}
 
 
 # ---------------------------------------------------------------------------

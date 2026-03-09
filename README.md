@@ -19,21 +19,21 @@ metadata:
   name: my-app
   annotations:
     # Constraint annotations (enforced by the validator)
-    sc.dsmlp.ucsd.edu/runAsUser: "1000,2000-3000,>5000000"
-    sc.dsmlp.ucsd.edu/runAsGroup: "1000"
-    sc.dsmlp.ucsd.edu/fsGroup: "1000"
-    sc.dsmlp.ucsd.edu/supplementalGroups: "1000,2000-3000"
-    sc.dsmlp.ucsd.edu/nodeLabel: "partition=gpu,partition=cpu"
-    sc.dsmlp.ucsd.edu/tolerations: "node-type=its-ai*:NoSchedule,glean-node=*:NoExecute"
+    tritonai-admission-webhook/policy.runAsUser: "1000,2000-3000,>5000000"
+    tritonai-admission-webhook/policy.runAsGroup: "1000"
+    tritonai-admission-webhook/policy.fsGroup: "1000"
+    tritonai-admission-webhook/policy.supplementalGroups: "1000,2000-3000"
+    tritonai-admission-webhook/policy.nodeLabel: "partition=gpu,partition=cpu"
+    tritonai-admission-webhook/policy.tolerations: "node-type=its-ai*:NoSchedule,glean-node=*:NoExecute"
     # Default annotations (used by the mutator to fill in absent fields)
-    sc.dsmlp.ucsd.edu/default.runAsUser: "1000"
-    sc.dsmlp.ucsd.edu/default.runAsGroup: "1000"
-    sc.dsmlp.ucsd.edu/default.nodeLabel: "partition=gpu"
-    sc.dsmlp.ucsd.edu/default.tolerations: "node-type=its-ai:NoSchedule"
+    tritonai-admission-webhook/default.runAsUser: "1000"
+    tritonai-admission-webhook/default.runAsGroup: "1000"
+    tritonai-admission-webhook/default.nodeLabel: "partition=gpu"
+    tritonai-admission-webhook/default.tolerations: "node-type=its-ai:NoSchedule"
     # NFS volume allowlist (see below)
-    sc.dsmlp.ucsd.edu/allowedNfsVolumes: "10.20.5.3:/export/data,itsnfs:/scratch,its-dsmlp-fs0[1-9]:/export/workspaces/*"
+    tritonai-admission-webhook/policy.allowedNfsVolumes: "10.20.5.3:/export/data,itsnfs:/scratch,its-dsmlp-fs0[1-9]:/export/workspaces/*"
     # Optionally remove types from the hardcoded permitted volume type set (see below)
-    sc.dsmlp.ucsd.edu/prohibitedVolumeTypes: "emptyDir,secret"
+    tritonai-admission-webhook/policy.prohibitedVolumeTypes: "emptyDir,secret"
 ```
 
 ---
@@ -52,7 +52,7 @@ Validation webhook.  They are not configurable via namespace annotations.
 | `hostIPC` | absent or `false` | hardcoded |
 | `securityContext.runAsNonRoot` | `true` | hardcoded |
 | `securityContext.sysctls` | absent or `[]` | hardcoded |
-| `volumes[*]` type | `configMap`, `downwardAPI`, `emptyDir`, `image`, `nfs`, `persistentVolumeClaim`, `projected`, `secret`, `serviceAccountToken`, `clusterTrustBundle`, `podCertificate` (base set; further restricted by `sc.dsmlp.ucsd.edu/prohibitedVolumeTypes`) | hardcoded |
+| `volumes[*]` type | `configMap`, `downwardAPI`, `emptyDir`, `image`, `nfs`, `persistentVolumeClaim`, `projected`, `secret`, `serviceAccountToken`, `clusterTrustBundle`, `podCertificate` (base set; further restricted by `tritonai-admission-webhook/policy.prohibitedVolumeTypes`) | hardcoded |
 
 ### Container-level (applies to `containers`, `initContainers`, and `ephemeralContainers`)
 
@@ -71,7 +71,7 @@ Any violation is reported as a validation error and the pod is rejected.
 
 ## Optional Defaults and Constraints
 
-### `sc.dsmlp.ucsd.edu/runAsUser` and `sc.dsmlp.ucsd.edu/default.runAsUser`; `sc.dsmlp.ucsd.edu/runAsGroup` and `sc.dsmlp.ucsd.edu/default.runAsGroup`
+### `tritonai-admission-webhook/policy.runAsUser` and `tritonai-admission-webhook/default.runAsUser`; `tritonai-admission-webhook/policy.runAsGroup` and `tritonai-admission-webhook/default.runAsGroup`
 
 _Mutator_:  If any Container-level `securityContext` is missing runAsUser/runAsGroup, and the Pod-level `securityContext` also lacks the value (or securityContext is absent), insert the default value at the Pod level.
 
@@ -89,23 +89,23 @@ Validator accepts a comma-separated list of tokens forming a `ConstraintSet` wit
 | Less-or-equal | `<=1000` | x ≤ 1000 |
 
 
-``` sc.dsmlp.ucsd.edu/runAsUser: "1000,2000-3000,>5000000" ```produces four constraints joined by OR — a user ID satisfies the annotation if it matches **any** of them. The same parser is shared by `runAsUser`, `runAsGroup`, `fsGroup`, and `supplementalGroups`.
+``` tritonai-admission-webhook/policy.runAsUser: "1000,2000-3000,>5000000" ```produces four constraints joined by OR — a user ID satisfies the annotation if it matches **any** of them. The same parser is shared by `runAsUser`, `runAsGroup`, `fsGroup`, and `supplementalGroups`.
 
 
-### `sc.dsmlp.ucsd.edu/fsGroup`
+### `tritonai-admission-webhook/policy.fsGroup`
 
 _Mutator_: If default provided, and Pod security context does not specify fsGroup, inject default value into Pod.
 
 _Validator_: If present, must match the annotation constraint value.  Validator accepts a `ConstraintSet` as with `runAsUser` using the same token logic.
 
-### `sc.dsmlp.ucsd.edu/supplementalGroups` and `sc.dsmlp.ucsd.edu/default.supplementalGroups`
+### `tritonai-admission-webhook/policy.supplementalGroups` and `tritonai-admission-webhook/default.supplementalGroups`
 
 _Mutator_: If comma-separated default list is provided, and Pod security context does not specify `supplementalGroups`, inject defaults.
 
 _Validator_: If present,  **every element** in Pod's `supplementalGroups` list must be explicitly permitted. Validator accepts a `ConstraintSet` comma-separated list as with `runAsUser` using the same token logic.
 
 
-### `sc.dsmlp.ucsd.edu/nodeLabel`
+### `tritonai-admission-webhook/policy.nodeLabel`
 
 _Mutator_: If default provided, and Pod does not specify nodeSelector(s), inject default list.
 
@@ -125,7 +125,7 @@ Example — namespace annotation `"rack=b,rack=c"` would:
 
 
 
-### `sc.dsmlp.ucsd.edu/allowedNfsVolumes`
+### `tritonai-admission-webhook/policy.allowedNfsVolumes`
 
 _Validator_: If the annotation is **absent or empty**, no NFS volumes are permitted. If NFS volumes are present, **each** must match at least one entry in the comma-separated allowlist.
 
@@ -133,12 +133,12 @@ A match is either an exact `server:/path` string or a **shell glob** (fnmatch) p
   e.g. `its-dsmlp-fs0[1-9]:/export/workspaces/*FA25`.
 
 ```
-sc.dsmlp.ucsd.edu/allowedNfsVolumes: "10.20.5.3:/export/data,itsnfs:/scratch,its-dsmlp-fs0[1-9]:/export/workspaces/*"
+tritonai-admission-webhook/policy.allowedNfsVolumes: "10.20.5.3:/export/data,itsnfs:/scratch,its-dsmlp-fs0[1-9]:/export/workspaces/*"
 ```
 
 A pod with no NFS volumes is always accepted regardless of this annotation.
 
-### `sc.dsmlp.ucsd.edu/prohibitedVolumeTypes`
+### `tritonai-admission-webhook/policy.prohibitedVolumeTypes`
 
 _Validator_: By default, the Validator allows use of the following Volume types:     "configMap",
     "downwardAPI",
@@ -164,10 +164,10 @@ across all `containers`, `initContainers`, and `ephemeralContainers` when their 
 | `downwardAPI` | `env[].valueFrom.fieldRef`, `env[].valueFrom.resourceFieldRef` | — |
 
 ```
-sc.dsmlp.ucsd.edu/prohibitedVolumeTypes: "emptyDir,secret"
+tritonai-admission-webhook/policy.prohibitedVolumeTypes: "emptyDir,secret"
 ```
 
-### `sc.dsmlp.ucsd.edu/tolerations` and `sc.dsmlp.ucsd.edu/default.tolerations`
+### `tritonai-admission-webhook/policy.tolerations` and `tritonai-admission-webhook/default.tolerations`
 
 _Mutator_: Injects a list of `key=value:effect` defaults into `spec.tolerations` only when the pod's toleration list is **absent or empty**. (Kubernetes-internal tolerations ignored when deciding whether to inject.) If an entry's `value` is `*`, the injected toleration uses `operator: Exists` (no `value` field); otherwise the injected toleration uses `operator: Equal` and the supplied value.
 
@@ -234,10 +234,10 @@ Restricted is cumulative — it includes all Baseline controls above, plus the f
 | Control | Restricted fields | Standard requires | Webhook status | Notes |
 |---------|------------------|-------------------|----------------|-------|
 | *(all Baseline controls)* | — | *(see table above)* | *(as above)* | — |
-| Volume Types | `spec.volumes[*]` | Only `configMap`, `csi`, `downwardAPI`, `emptyDir`, `ephemeral`, `persistentVolumeClaim`, `projected`, `secret` | ⚙️ Configurable  | The hardcoded allowed set includes extra types not permitted by Restricted: `nfs`, `image`, `serviceAccountToken`, `clusterTrustBundle`, `podCertificate`. These can be excluded using `sc.dsmlp.ucsd.edu/prohibitedVolumeTypes`, reducing the effective set to `configMap`, `downwardAPI`, `emptyDir`, `persistentVolumeClaim`, `projected`, `secret`. However, `csi` and `ephemeral` — which Restricted allows — are not in the webhook's base set and cannot be added via annotation, so pods requiring those types will always be rejected. |
+| Volume Types | `spec.volumes[*]` | Only `configMap`, `csi`, `downwardAPI`, `emptyDir`, `ephemeral`, `persistentVolumeClaim`, `projected`, `secret` | ⚙️ Configurable  | The hardcoded allowed set includes extra types not permitted by Restricted: `nfs`, `image`, `serviceAccountToken`, `clusterTrustBundle`, `podCertificate`. These can be excluded using `tritonai-admission-webhook/policy.prohibitedVolumeTypes`, reducing the effective set to `configMap`, `downwardAPI`, `emptyDir`, `persistentVolumeClaim`, `projected`, `secret`. However, `csi` and `ephemeral` — which Restricted allows — are not in the webhook's base set and cannot be added via annotation, so pods requiring those types will always be rejected. |
 | Privilege Escalation | `spec.containers[*].securityContext.allowPrivilegeEscalation`, init/ephemeral containers | Must be explicitly `false` | ⚠️ Partial | The webhook rejects any value other than `false` (hardcoded), but it also accepts the field being absent (treated as `false` by k8s API) |
 | Running as Non-root (`runAsNonRoot`) | `spec.securityContext.runAsNonRoot`, `spec.containers[*].securityContext.runAsNonRoot`, init/ephemeral containers | `true` at pod or container level | ✅ Enforced | Hardcoded: `runAsNonRoot` must be `true` at pod level or on every container individually. The mutator unconditionally injects `true` when the field is absent. |
-| Running as Non-root user (`runAsUser != 0`) | `spec.securityContext.runAsUser`, `spec.containers[*].securityContext.runAsUser`, init/ephemeral containers | Any non-zero value, or `undefined/null` | ⚙️ Configurable | The webhook enforces `runAsUser` through `sc.dsmlp.ucsd.edu/runAsUser`. Setting that annotation to `">0"` (or any constraint that excludes `0`) satisfies this control. There is no hardcoded default preventing UID 0; compliance depends entirely on the namespace annotation. |
+| Running as Non-root user (`runAsUser != 0`) | `spec.securityContext.runAsUser`, `spec.containers[*].securityContext.runAsUser`, init/ephemeral containers | Any non-zero value, or `undefined/null` | ⚙️ Configurable | The webhook enforces `runAsUser` through `tritonai-admission-webhook/policy.runAsUser`. Setting that annotation to `">0"` (or any constraint that excludes `0`) satisfies this control. There is no hardcoded default preventing UID 0; compliance depends entirely on the namespace annotation. |
 | Seccomp (Restricted) | `spec.securityContext.seccompProfile.type`, `spec.containers[*].securityContext.seccompProfile.type`, init/ephemeral containers | Must be `RuntimeDefault` or `Localhost` (absence is not permitted) | ❌ Not enforced | Seccomp profile type is not inspected. Under Restricted, omitting the field is a violation; the webhook cannot enforce this without new logic. |
 | Capabilities (`drop ALL`) | `spec.containers[*].securityContext.capabilities.drop`, init/ephemeral containers | Must include `ALL` |  ✅ Equivalent | `capabilities.drop` is not checked. The webhook instead validates `capabilities.add` (only `NET_BIND_SERVICE` permitted). |
 
@@ -330,12 +330,13 @@ kubectl apply -f deploy/webhook.yaml
 
 ## Environment Variables
 
-| Variable        | Default | Description                         |
-|----------------|---------|-------------------------------------|
-| `LOG_LEVEL`    | `INFO`  | Python logging level                |
-| `PORT`         | `8443`  | Listening port (dev entrypoint only)|
-| `TLS_KEY_FILE` | —       | Path to TLS private key             |
-| `TLS_CERT_FILE`| —       | Path to TLS certificate             |
+| Variable             | Default                        | Description                                                              |
+|---------------------|--------------------------------|--------------------------------------------------------------------------|
+| `LOG_LEVEL`         | `INFO`                         | Python logging level                                                     |
+| `ANNOTATION_PREFIX` | `tritonai-admission-webhook`   | Prefix for all webhook namespace annotations (`policy.*`, `default.*`)   |
+| `PORT`              | `8443`                         | Listening port (dev entrypoint only)                                     |
+| `TLS_KEY_FILE`      | —                              | Path to TLS private key                                                  |
+| `TLS_CERT_FILE`     | —                              | Path to TLS certificate                                                  |
 
 ---
 

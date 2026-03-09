@@ -13,10 +13,9 @@ from functools import lru_cache
 from kubernetes import client, config  # type: ignore[import-untyped]
 from kubernetes.client.exceptions import ApiException  # type: ignore[import-untyped]
 
-logger = logging.getLogger(__name__)
+from .config import ANNOTATION_NS
 
-# Annotation prefix used by this webhook
-ANNOTATION_PREFIX = "sc.dsmlp.ucsd.edu/"
+logger = logging.getLogger(__name__)
 
 
 def _load_k8s_config() -> None:
@@ -36,14 +35,14 @@ def _get_core_v1_api() -> client.CoreV1Api:
 
 
 def get_namespace_security_annotations(namespace: str) -> dict[str, str]:
-    """Return a dict of ``sc.dsmlp.ucsd.edu/*`` annotations from *namespace*.
+    """Return a dict of ``<ANNOTATION_PREFIX>/*`` annotations from *namespace*.
 
     Returns an empty dict if the namespace has no relevant annotations or
     cannot be retrieved (errors are logged but not re-raised so the webhook
     can return a clear rejection message rather than a 500).
 
     The returned keys are full annotation strings, e.g.:
-        {"sc.dsmlp.ucsd.edu/runAsUser": "1000,2000-3000"}
+        {"tritonai-admission-webhook/policy.runAsUser": "1000,2000-3000"}
     """
     try:
         api = _get_core_v1_api()
@@ -52,7 +51,7 @@ def get_namespace_security_annotations(namespace: str) -> dict[str, str]:
         return {
             key: value
             for key, value in annotations.items()
-            if key.startswith(ANNOTATION_PREFIX)
+            if key.startswith(ANNOTATION_NS)
         }
     except ApiException as exc:
         logger.error(
