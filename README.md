@@ -3,7 +3,7 @@
 - https://kubernetes.io/docs/reference/access-authn-authz/extensible-admission-controllers/#what-are-admission-webhooks
 
 
-_Note (agt): this validator was built via Claude Code, with prompts as outlined in PROMPT_LOG.md.  I have reviewed the code and tests and am confident in its output._
+_Note (agt): this validator was built via Claude Code, with prompts as outlined in PROMPT_LOG.md.  I have reviewed the code and tests and am confident in its output, but welcome any/all review._
 
 # TritonAI Pod Security Admission Webhook
 
