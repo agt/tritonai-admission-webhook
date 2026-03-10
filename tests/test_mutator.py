@@ -61,7 +61,7 @@ def test_no_patches_when_no_annotations():
 
 def test_no_patches_when_no_constraint_annotation():
     # default annotation present but no matching constraint annotation
-    annotations = {"sc.dsmlp.ucsd.edu/default.runAsUser": "1000"}
+    annotations = {"tritonai-admission-webhook/default.runAsUser": "1000"}
     spec = _pod(pod_sc={"runAsNonRoot": True}, containers=[_container(sc={"runAsUser": 999})])
     assert mutate_pod(annotations, spec) == []
 
@@ -72,7 +72,7 @@ def test_no_patches_when_no_constraint_annotation():
 
 
 def test_no_patches_when_default_annotation_absent(caplog):
-    annotations = {"sc.dsmlp.ucsd.edu/runAsUser": "1000"}
+    annotations = {"tritonai-admission-webhook/policy.runAsUser": "1000"}
     spec = _pod(pod_sc={"runAsNonRoot": True}, containers=[_container(sc=None)])
     patches = mutate_pod(annotations, spec)
     assert patches == []
@@ -81,8 +81,8 @@ def test_no_patches_when_default_annotation_absent(caplog):
 
 def test_no_patches_when_default_unparseable(caplog):
     annotations = {
-        "sc.dsmlp.ucsd.edu/runAsUser": "1000",
-        "sc.dsmlp.ucsd.edu/default.runAsUser": "not-a-number",
+        "tritonai-admission-webhook/policy.runAsUser": "1000",
+        "tritonai-admission-webhook/default.runAsUser": "not-a-number",
     }
     spec = _pod(pod_sc={"runAsNonRoot": True}, containers=[_container(sc=None)])
     patches = mutate_pod(annotations, spec)
@@ -96,8 +96,8 @@ def test_no_patches_when_default_unparseable(caplog):
 
 
 RUNASUSER_ANNOTATIONS = {
-    "sc.dsmlp.ucsd.edu/runAsUser": "1000",
-    "sc.dsmlp.ucsd.edu/default.runAsUser": "1000",
+    "tritonai-admission-webhook/policy.runAsUser": "1000",
+    "tritonai-admission-webhook/default.runAsUser": "1000",
 }
 
 
@@ -186,8 +186,8 @@ class TestMutateRunAsUser:
 
 
 FSGROUP_ANNOTATIONS = {
-    "sc.dsmlp.ucsd.edu/fsGroup": "1000",
-    "sc.dsmlp.ucsd.edu/default.fsGroup": "1000",
+    "tritonai-admission-webhook/policy.fsGroup": "1000",
+    "tritonai-admission-webhook/default.fsGroup": "1000",
 }
 
 
@@ -217,13 +217,13 @@ class TestMutateFsGroup:
 
 
 SG_ANNOTATIONS = {
-    "sc.dsmlp.ucsd.edu/supplementalGroups": "1000,2000-3000",
-    "sc.dsmlp.ucsd.edu/default.supplementalGroups": "1000",
+    "tritonai-admission-webhook/policy.supplementalGroups": "1000,2000-3000",
+    "tritonai-admission-webhook/default.supplementalGroups": "1000",
 }
 
 SG_ANNOTATIONS_MULTI = {
-    "sc.dsmlp.ucsd.edu/supplementalGroups": "1000,2000-3000",
-    "sc.dsmlp.ucsd.edu/default.supplementalGroups": "1000,2022,3900",
+    "tritonai-admission-webhook/policy.supplementalGroups": "1000,2000-3000",
+    "tritonai-admission-webhook/default.supplementalGroups": "1000,2022,3900",
 }
 
 
@@ -275,7 +275,7 @@ class TestMutateSupplementalGroups:
 
     def test_no_patches_when_no_constraint_annotation(self):
         """default.supplementalGroups present but no constraint annotation → no injection."""
-        annotations = {"sc.dsmlp.ucsd.edu/default.supplementalGroups": "1000"}
+        annotations = {"tritonai-admission-webhook/default.supplementalGroups": "1000"}
         spec = _pod(pod_sc={"runAsNonRoot": True})
         assert mutate_pod(annotations, spec) == []
 
@@ -286,8 +286,8 @@ class TestMutateSupplementalGroups:
 
 
 NL_ANNOTATIONS = {
-    "sc.dsmlp.ucsd.edu/nodeLabel": "partition=gpu",
-    "sc.dsmlp.ucsd.edu/default.nodeLabel": "partition=gpu",
+    "tritonai-admission-webhook/policy.nodeLabel": "partition=gpu",
+    "tritonai-admission-webhook/default.nodeLabel": "partition=gpu",
 }
 
 
@@ -335,7 +335,7 @@ class TestMutateNodeLabel:
         assert any(p["path"] == "/spec/nodeSelector" for p in patches)
 
     def test_nodename_removed_even_without_valid_default(self, caplog):
-        annotations = {"sc.dsmlp.ucsd.edu/nodeLabel": "partition=gpu"}  # no default
+        annotations = {"tritonai-admission-webhook/policy.nodeLabel": "partition=gpu"}  # no default
         spec = _pod()
         spec["nodeName"] = "node-42"
         patches = mutate_pod(annotations, spec)
@@ -344,8 +344,8 @@ class TestMutateNodeLabel:
 
     def test_nodeselector_key_with_slash_escaped_in_pointer(self):
         annotations = {
-            "sc.dsmlp.ucsd.edu/nodeLabel": "kubernetes.io/hostname=node-1",
-            "sc.dsmlp.ucsd.edu/default.nodeLabel": "kubernetes.io/hostname=node-1",
+            "tritonai-admission-webhook/policy.nodeLabel": "kubernetes.io/hostname=node-1",
+            "tritonai-admission-webhook/default.nodeLabel": "kubernetes.io/hostname=node-1",
         }
         # nodeSelector absent → default injected; verify pointer escaping
         spec = _pod(pod_sc={"runAsNonRoot": True})
@@ -357,8 +357,8 @@ class TestMutateNodeLabel:
     def test_existing_nodeselector_suppresses_injection(self):
         # Any pre-existing nodeSelector (even with unrelated keys) prevents injection.
         annotations = {
-            "sc.dsmlp.ucsd.edu/nodeLabel": "rack=a,rack=b",
-            "sc.dsmlp.ucsd.edu/default.nodeLabel": "rack=a",
+            "tritonai-admission-webhook/policy.nodeLabel": "rack=a,rack=b",
+            "tritonai-admission-webhook/default.nodeLabel": "rack=a",
         }
         spec = _pod(pod_sc={"runAsNonRoot": True})
         spec["nodeSelector"] = {"zone": "us-west-2"}
@@ -413,8 +413,8 @@ class TestMutateRunAsNonRoot:
         """When runAsUser creates pod SC, runAsNonRoot is appended as a second patch."""
         spec = _pod(containers=[_container(sc=None)])
         patches = mutate_pod({
-            "sc.dsmlp.ucsd.edu/runAsUser": "1000",
-            "sc.dsmlp.ucsd.edu/default.runAsUser": "1000",
+            "tritonai-admission-webhook/policy.runAsUser": "1000",
+            "tritonai-admission-webhook/default.runAsUser": "1000",
         }, spec)
         # runAsUser creates pod SC first
         assert _patch_at(patches, "/spec/securityContext") is not None
@@ -427,8 +427,8 @@ class TestMutateRunAsNonRoot:
         """Patch order: create SC (runAsUser) then add field (runAsNonRoot) is valid JSON Patch."""
         spec = _pod(containers=[_container(sc=None)])
         patches = mutate_pod({
-            "sc.dsmlp.ucsd.edu/runAsUser": "1000",
-            "sc.dsmlp.ucsd.edu/default.runAsUser": "1000",
+            "tritonai-admission-webhook/policy.runAsUser": "1000",
+            "tritonai-admission-webhook/default.runAsUser": "1000",
         }, spec)
         create_idx = next(i for i, p in enumerate(patches) if p["path"] == "/spec/securityContext")
         add_idx = next(i for i, p in enumerate(patches) if p["path"] == "/spec/securityContext/runAsNonRoot")
@@ -444,12 +444,12 @@ class TestMultipleConstraintMutations:
 
     def test_all_fields_patched(self):
         annotations = {
-            "sc.dsmlp.ucsd.edu/runAsUser": "1000",
-            "sc.dsmlp.ucsd.edu/default.runAsUser": "1000",
-            "sc.dsmlp.ucsd.edu/runAsGroup": "2000",
-            "sc.dsmlp.ucsd.edu/default.runAsGroup": "2000",
-            "sc.dsmlp.ucsd.edu/nodeLabel": "partition=gpu",
-            "sc.dsmlp.ucsd.edu/default.nodeLabel": "partition=gpu",
+            "tritonai-admission-webhook/policy.runAsUser": "1000",
+            "tritonai-admission-webhook/default.runAsUser": "1000",
+            "tritonai-admission-webhook/policy.runAsGroup": "2000",
+            "tritonai-admission-webhook/default.runAsGroup": "2000",
+            "tritonai-admission-webhook/policy.nodeLabel": "partition=gpu",
+            "tritonai-admission-webhook/default.nodeLabel": "partition=gpu",
         }
         # Pod with no SC and a nodeName set
         spec = _pod(containers=[_container(sc=None)])
@@ -464,9 +464,9 @@ class TestMultipleConstraintMutations:
 
     def test_partial_remediation_when_one_default_missing(self, caplog):
         annotations = {
-            "sc.dsmlp.ucsd.edu/runAsUser": "1000",
-            "sc.dsmlp.ucsd.edu/default.runAsUser": "1000",
-            "sc.dsmlp.ucsd.edu/runAsGroup": "2000",
+            "tritonai-admission-webhook/policy.runAsUser": "1000",
+            "tritonai-admission-webhook/default.runAsUser": "1000",
+            "tritonai-admission-webhook/policy.runAsGroup": "2000",
             # no default for runAsGroup
         }
         # Container has no SC at all — both fields are absent
@@ -482,7 +482,7 @@ class TestMultipleConstraintMutations:
 # tolerations — optional default injection
 # ---------------------------------------------------------------------------
 
-TOLERATION_ANNOTATION = "sc.dsmlp.ucsd.edu/default.tolerations"
+TOLERATION_ANNOTATION = "tritonai-admission-webhook/default.tolerations"
 
 
 class TestMutateTolerations:
@@ -628,8 +628,8 @@ def _review(
 
 
 NS_WITH_DEFAULTS = {
-    "sc.dsmlp.ucsd.edu/runAsUser": "1000",
-    "sc.dsmlp.ucsd.edu/default.runAsUser": "1000",
+    "tritonai-admission-webhook/policy.runAsUser": "1000",
+    "tritonai-admission-webhook/default.runAsUser": "1000",
 }
 
 

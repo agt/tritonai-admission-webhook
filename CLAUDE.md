@@ -41,7 +41,7 @@ API Server → /mutate → fetch ns annotations → mutate_pod() → JSON Patch 
 API Server → /validate → fetch ns annotations → [workloads: mutate_pod_spec()] → validate_pod() → allow/deny
 ```
 
-Namespace security annotations are fetched from the Kubernetes API via `app/namespace_client.py` (`get_namespace_security_annotations()`), which returns only annotations with the `sc.dsmlp.ucsd.edu/` prefix.
+Namespace security annotations are fetched from the Kubernetes API via `app/namespace_client.py` (`get_namespace_security_annotations()`), which returns only annotations with the `ANNOTATION_PREFIX/` prefix (default: `tritonai-admission-webhook/`).
 
 ### Constraint system (`app/constraints/`)
 
@@ -70,7 +70,7 @@ Two layers of checks:
    - Pod: `hostNetwork`/`hostPID`/`hostIPC` absent or false; `securityContext.sysctls` absent or empty; `securityContext.runAsNonRoot` true (REQUIRED_SCALAR semantics); volume types restricted to allowed set; NFS volumes checked against `allowedNfsVolumes` annotation; `prohibitedVolumeTypes` annotation narrows the allowed set and also blocks env/envFrom sources.
    - Containers/initContainers/ephemeralContainers: `allowPrivilegeEscalation` absent or false; `privileged` absent or false; `capabilities.add` absent/empty or `["NET_BIND_SERVICE"]` only; `procMount` absent/`""`/`"Default"`.
 
-3. **Toleration allowlist** (`sc.dsmlp.ucsd.edu/tolerations`): annotation-driven, handled outside `_FIELD_SPECS` like NFS volumes. Each pod toleration must match at least one `key=value:effect` entry (fnmatch globs supported in any field; `*` value also matches `Exists` operator). Annotation absent = no restriction.
+3. **Toleration allowlist** (`<POLICY_PREFIX>tolerations`): annotation-driven, handled outside `_FIELD_SPECS` like NFS volumes. Each pod toleration must match at least one `key=value:effect` entry (fnmatch globs supported in any field; `*` value also matches `Exists` operator). Annotation absent = no restriction.
 
 ### Mutator (`app/mutator.py`)
 
@@ -82,10 +82,13 @@ Only injects missing values; never overwrites existing ones (the validator rejec
 - **OPTIONAL_SCALAR/OPTIONAL_LIST** fields: no mutation (absent is always valid).
 - **NODE_SELECTOR**: always removes `nodeName`; injects default `nodeSelector` only when none is present.
 - **runAsNonRoot** (unconditional): always sets `securityContext.runAsNonRoot = True` when absent.
-- **tolerations** (`sc.dsmlp.ucsd.edu/default.tolerations`): injects a list of `key=value:effect` tolerations into `spec.tolerations` only when that field is absent or empty. Value `*` produces `operator: Exists`; any other value produces `operator: Equal`.
+- **tolerations** (`<DEFAULT_PREFIX>tolerations`): injects a list of `key=value:effect` tolerations into `spec.tolerations` only when that field is absent or empty. Value `*` produces `operator: Exists`; any other value produces `operator: Equal`.
 
-Default values come from `sc.dsmlp.ucsd.edu/default.<field>` namespace annotations. Missing or unparseable defaults are logged as warnings; other fields continue to be processed.
+Default values come from `<DEFAULT_PREFIX><field>` namespace annotations. Missing or unparseable defaults are logged as warnings; other fields continue to be processed.
 
 ### Key annotation prefix
 
-All annotations use the `sc.dsmlp.ucsd.edu/` prefix. Constraint annotations are the bare suffix (e.g. `sc.dsmlp.ucsd.edu/runAsUser`); default annotations used by the mutator append `default.` (e.g. `sc.dsmlp.ucsd.edu/default.runAsUser`).
+The annotation prefix is configured via the `ANNOTATION_PREFIX` env var (default: `tritonai-admission-webhook`). Three derived constants in `app/config.py`:
+- `ANNOTATION_NS = f"{ANNOTATION_PREFIX}/"` — used to filter namespace annotations
+- `POLICY_PREFIX = f"{ANNOTATION_NS}policy."` — constraint annotations (e.g. `tritonai-admission-webhook/policy.runAsUser`)
+- `DEFAULT_PREFIX = f"{ANNOTATION_NS}default."` — mutator default annotations (e.g. `tritonai-admission-webhook/default.runAsUser`)

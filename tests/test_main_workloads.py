@@ -16,7 +16,7 @@ client = TestClient(app)
 # Helpers
 # ---------------------------------------------------------------------------
 
-NS_ANNOTATIONS = {"sc.dsmlp.ucsd.edu/runAsUser": "1000"}
+NS_ANNOTATIONS = {"tritonai-admission-webhook/policy.runAsUser": "1000"}
 
 # A pod spec that satisfies all hardcoded constraints and the runAsUser annotation
 _VALID_POD_SPEC = {
@@ -245,8 +245,8 @@ class TestValidateWorkloads:
     def test_deployment_defaults_applied_before_validation(self):
         """Mutator defaults are applied to the workload template before validation."""
         annotations = {
-            "sc.dsmlp.ucsd.edu/runAsUser": "1000",
-            "sc.dsmlp.ucsd.edu/default.runAsUser": "1000",
+            "tritonai-admission-webhook/policy.runAsUser": "1000",
+            "tritonai-admission-webhook/default.runAsUser": "1000",
         }
         # Container has no runAsUser — mutator should inject default, then validator passes
         pod_spec = {
@@ -309,8 +309,8 @@ class TestMutateWorkloads:
     def test_workload_kinds_passed_through_unmodified(self, kind):
         """The mutating webhook does not patch workload resources."""
         annotations = {
-            "sc.dsmlp.ucsd.edu/runAsUser": "1000",
-            "sc.dsmlp.ucsd.edu/default.runAsUser": "1000",
+            "tritonai-admission-webhook/policy.runAsUser": "1000",
+            "tritonai-admission-webhook/default.runAsUser": "1000",
         }
         pod_spec = {"containers": [{"name": "app"}]}
         with patch("app.main.get_namespace_security_annotations", return_value=annotations):
@@ -323,8 +323,8 @@ class TestMutateWorkloads:
 
     def test_cronjob_passed_through_unmodified(self):
         annotations = {
-            "sc.dsmlp.ucsd.edu/runAsUser": "1000",
-            "sc.dsmlp.ucsd.edu/default.runAsUser": "1000",
+            "tritonai-admission-webhook/policy.runAsUser": "1000",
+            "tritonai-admission-webhook/default.runAsUser": "1000",
         }
         pod_spec = {"containers": [{"name": "app"}]}
         with patch("app.main.get_namespace_security_annotations", return_value=annotations):

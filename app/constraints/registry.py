@@ -12,6 +12,7 @@ app/validator.py and call it from validate_pod().
 """
 from __future__ import annotations
 
+from ..config import POLICY_PREFIX
 from .base import ConstraintParser, ConstraintSet
 from .nodelabel import NodeLabelConstraintParser
 from .numeric import NumericConstraintParser
@@ -20,11 +21,11 @@ from .numeric import NumericConstraintParser
 # Registry: annotation key → parser instance
 # ---------------------------------------------------------------------------
 CONSTRAINT_REGISTRY: dict[str, ConstraintParser] = {
-    "sc.dsmlp.ucsd.edu/runAsUser": NumericConstraintParser(),
-    "sc.dsmlp.ucsd.edu/runAsGroup": NumericConstraintParser(),
-    "sc.dsmlp.ucsd.edu/fsGroup": NumericConstraintParser(),
-    "sc.dsmlp.ucsd.edu/supplementalGroups": NumericConstraintParser(),
-    "sc.dsmlp.ucsd.edu/nodeLabel": NodeLabelConstraintParser(),
+    f"{POLICY_PREFIX}runAsUser": NumericConstraintParser(),
+    f"{POLICY_PREFIX}runAsGroup": NumericConstraintParser(),
+    f"{POLICY_PREFIX}fsGroup": NumericConstraintParser(),
+    f"{POLICY_PREFIX}supplementalGroups": NumericConstraintParser(),
+    f"{POLICY_PREFIX}nodeLabel": NodeLabelConstraintParser(),
 }
 
 

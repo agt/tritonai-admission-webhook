@@ -56,7 +56,7 @@ def _container(
 def test_no_annotations_rejects():
     result = validate_pod({}, _pod())
     assert result.allowed is False
-    assert "sc.dsmlp.ucsd.edu" in result.message
+    assert "tritonai-admission-webhook" in result.message
 
 
 # ---------------------------------------------------------------------------
@@ -65,7 +65,7 @@ def test_no_annotations_rejects():
 
 
 class TestRunAsUser:
-    ANNOTATIONS = {"sc.dsmlp.ucsd.edu/runAsUser": "1000"}
+    ANNOTATIONS = {"tritonai-admission-webhook/policy.runAsUser": "1000"}
 
     def test_pod_level_match(self):
         spec = _pod(pod_sc={"runAsUser": 1000, "runAsNonRoot": True}, containers=[_container()])
@@ -146,22 +146,22 @@ class TestRunAsUser:
         assert result.allowed is False
 
     def test_range_constraint(self):
-        annotations = {"sc.dsmlp.ucsd.edu/runAsUser": "1000,2000-3000"}
+        annotations = {"tritonai-admission-webhook/policy.runAsUser": "1000,2000-3000"}
         spec = _pod(pod_sc={"runAsNonRoot": True}, containers=[_container(sc={"runAsUser": 2500})])
         assert validate_pod(annotations, spec).allowed is True
 
     def test_range_constraint_fail(self):
-        annotations = {"sc.dsmlp.ucsd.edu/runAsUser": "1000,2000-3000"}
+        annotations = {"tritonai-admission-webhook/policy.runAsUser": "1000,2000-3000"}
         spec = _pod(containers=[_container(sc={"runAsUser": 1500})])
         assert validate_pod(annotations, spec).allowed is False
 
     def test_greater_than_constraint(self):
-        annotations = {"sc.dsmlp.ucsd.edu/runAsUser": ">5000000"}
+        annotations = {"tritonai-admission-webhook/policy.runAsUser": ">5000000"}
         spec = _pod(pod_sc={"runAsNonRoot": True}, containers=[_container(sc={"runAsUser": 5000001})])
         assert validate_pod(annotations, spec).allowed is True
 
     def test_greater_than_boundary_fail(self):
-        annotations = {"sc.dsmlp.ucsd.edu/runAsUser": ">5000000"}
+        annotations = {"tritonai-admission-webhook/policy.runAsUser": ">5000000"}
         spec = _pod(containers=[_container(sc={"runAsUser": 5000000})])
         assert validate_pod(annotations, spec).allowed is False
 
@@ -172,7 +172,7 @@ class TestRunAsUser:
 
 
 class TestRunAsGroup:
-    ANNOTATIONS = {"sc.dsmlp.ucsd.edu/runAsGroup": "2000"}
+    ANNOTATIONS = {"tritonai-admission-webhook/policy.runAsGroup": "2000"}
 
     def test_pod_level_match(self):
         spec = _pod(pod_sc={"runAsGroup": 2000, "runAsNonRoot": True})
@@ -193,7 +193,7 @@ class TestRunAsGroup:
 
 
 class TestFsGroup:
-    ANNOTATIONS = {"sc.dsmlp.ucsd.edu/fsGroup": "1000"}
+    ANNOTATIONS = {"tritonai-admission-webhook/policy.fsGroup": "1000"}
 
     def test_absent_is_ok(self):
         spec = _pod(pod_sc={"runAsNonRoot": True})
@@ -220,7 +220,7 @@ class TestFsGroup:
 
 
 class TestSupplementalGroups:
-    ANNOTATIONS = {"sc.dsmlp.ucsd.edu/supplementalGroups": "1000,2000-3000"}
+    ANNOTATIONS = {"tritonai-admission-webhook/policy.supplementalGroups": "1000,2000-3000"}
 
     def test_absent_is_ok(self):
         spec = _pod(pod_sc={"runAsNonRoot": True})
@@ -248,9 +248,9 @@ class TestSupplementalGroups:
 
 class TestMultipleConstraints:
     ANNOTATIONS = {
-        "sc.dsmlp.ucsd.edu/runAsUser": "1000",
-        "sc.dsmlp.ucsd.edu/runAsGroup": "2000",
-        "sc.dsmlp.ucsd.edu/fsGroup": "3000",
+        "tritonai-admission-webhook/policy.runAsUser": "1000",
+        "tritonai-admission-webhook/policy.runAsGroup": "2000",
+        "tritonai-admission-webhook/policy.fsGroup": "3000",
     }
 
     def test_all_pass(self):
@@ -285,7 +285,7 @@ class TestMultipleConstraints:
 
 class TestEdgeCases:
     def test_malformed_annotation_rejects(self):
-        annotations = {"sc.dsmlp.ucsd.edu/runAsUser": "foo,bar"}
+        annotations = {"tritonai-admission-webhook/policy.runAsUser": "foo,bar"}
         spec = _pod(pod_sc={"runAsUser": 1000})
         result = validate_pod(annotations, spec)
         assert result.allowed is False
@@ -294,15 +294,15 @@ class TestEdgeCases:
     def test_unknown_annotation_key_ignored(self):
         """Unknown annotation keys (not in CONSTRAINT_REGISTRY) are silently ignored."""
         annotations = {
-            "sc.dsmlp.ucsd.edu/runAsUser": "1000",
-            "sc.dsmlp.ucsd.edu/unknownFutureFiled": "xyz",
+            "tritonai-admission-webhook/policy.runAsUser": "1000",
+            "tritonai-admission-webhook/policy.unknownFutureFiled": "xyz",
         }
         spec = _pod(pod_sc={"runAsNonRoot": True}, containers=[_container(sc={"runAsUser": 1000})])
         # Should pass based on the known constraint; the unknown key is ignored
         assert validate_pod(annotations, spec).allowed is True
 
     def test_multiple_containers_all_must_pass(self):
-        annotations = {"sc.dsmlp.ucsd.edu/runAsUser": "1000"}
+        annotations = {"tritonai-admission-webhook/policy.runAsUser": "1000"}
         spec = _pod(
             containers=[
                 _container("c1", sc={"runAsUser": 1000}),
@@ -314,7 +314,7 @@ class TestEdgeCases:
         assert "c2" in result.message
 
     def test_ephemeral_container_must_also_pass(self):
-        annotations = {"sc.dsmlp.ucsd.edu/runAsUser": "1000"}
+        annotations = {"tritonai-admission-webhook/policy.runAsUser": "1000"}
         spec = _pod(
             containers=[_container("c1", sc={"runAsUser": 1000})],
             ephemeral_containers=[_container("e1", sc={"runAsUser": 999})],  # bad
@@ -330,8 +330,8 @@ class TestEdgeCases:
 
 
 class TestNodeLabel:
-    ANNOTATIONS = {"sc.dsmlp.ucsd.edu/nodeLabel": "partition=a"}
-    MULTI_ANNOTATIONS = {"sc.dsmlp.ucsd.edu/nodeLabel": "rack=b,rack=c"}
+    ANNOTATIONS = {"tritonai-admission-webhook/policy.nodeLabel": "partition=a"}
+    MULTI_ANNOTATIONS = {"tritonai-admission-webhook/policy.nodeLabel": "rack=b,rack=c"}
 
     def test_matching_nodeselector_allowed(self):
         spec = _pod(pod_sc={"runAsNonRoot": True})
@@ -404,15 +404,15 @@ class TestNodeLabel:
 
     def test_nodelabel_combined_with_other_constraints(self):
         annotations = {
-            "sc.dsmlp.ucsd.edu/runAsUser": "1000",
-            "sc.dsmlp.ucsd.edu/nodeLabel": "partition=gpu",
+            "tritonai-admission-webhook/policy.runAsUser": "1000",
+            "tritonai-admission-webhook/policy.nodeLabel": "partition=gpu",
         }
         spec = _pod(pod_sc={"runAsNonRoot": True}, containers=[_container(sc={"runAsUser": 1000})])
         spec["nodeSelector"] = {"partition": "gpu"}
         assert validate_pod(annotations, spec).allowed is True
 
     def test_nodelabel_malformed_annotation_rejected(self):
-        annotations = {"sc.dsmlp.ucsd.edu/nodeLabel": "no-equals-sign"}
+        annotations = {"tritonai-admission-webhook/policy.nodeLabel": "no-equals-sign"}
         spec = _pod()
         spec["nodeSelector"] = {"partition": "a"}
         result = validate_pod(annotations, spec)
@@ -426,7 +426,7 @@ class TestNodeLabel:
 
 # Minimal valid annotations so annotation-based checks pass; we focus on the
 # hardcoded constraints in this class.
-_ALWAYS_ANNOTATIONS = {"sc.dsmlp.ucsd.edu/runAsUser": "1000"}
+_ALWAYS_ANNOTATIONS = {"tritonai-admission-webhook/policy.runAsUser": "1000"}
 _ALWAYS_SPEC_OK = _pod(pod_sc={"runAsNonRoot": True}, containers=[_container(sc={"runAsUser": 1000})])
 
 
@@ -823,7 +823,7 @@ class TestHardcodedVolumeTypes:
             assert result.allowed is True, f"Expected {vol_type!r} to be allowed; got: {result.message}"
 
     def test_nfs_type_ok_when_annotation_permits(self):
-        anns = {**_ALWAYS_ANNOTATIONS, "sc.dsmlp.ucsd.edu/allowedNfsVolumes": "nfsserver:/path"}
+        anns = {**_ALWAYS_ANNOTATIONS, "tritonai-admission-webhook/policy.allowedNfsVolumes": "nfsserver:/path"}
         spec = self._spec({"name": "v", "nfs": {"server": "nfsserver", "path": "/path"}})
         assert validate_pod(anns, spec).allowed is True
 
@@ -880,7 +880,7 @@ def _nfs_spec(*nfs_volumes: dict) -> dict:
 # prohibitedVolumeTypes annotation constraint
 # ---------------------------------------------------------------------------
 
-_PVT_ANN = "sc.dsmlp.ucsd.edu/prohibitedVolumeTypes"
+_PVT_ANN = "tritonai-admission-webhook/policy.prohibitedVolumeTypes"
 
 
 class TestProhibitedVolumeTypes:
@@ -1141,11 +1141,11 @@ class TestAllowedNfsVolumes:
         assert validate_pod(_NFS_ANNOTATIONS_BASE, spec).allowed is True
 
     def test_no_nfs_volumes_annotation_empty_ok(self):
-        anns = {**_NFS_ANNOTATIONS_BASE, "sc.dsmlp.ucsd.edu/allowedNfsVolumes": ""}
+        anns = {**_NFS_ANNOTATIONS_BASE, "tritonai-admission-webhook/policy.allowedNfsVolumes": ""}
         assert validate_pod(anns, _nfs_spec()).allowed is True
 
     def test_no_nfs_volumes_annotation_with_patterns_ok(self):
-        anns = {**_NFS_ANNOTATIONS_BASE, "sc.dsmlp.ucsd.edu/allowedNfsVolumes": "10.20.5.3:/export/data"}
+        anns = {**_NFS_ANNOTATIONS_BASE, "tritonai-admission-webhook/policy.allowedNfsVolumes": "10.20.5.3:/export/data"}
         assert validate_pod(anns, _nfs_spec()).allowed is True
 
     # ------------------------------------------------------------------ #
@@ -1159,12 +1159,12 @@ class TestAllowedNfsVolumes:
         assert "allowedNfsVolumes" in result.message
 
     def test_nfs_volume_annotation_empty_string_rejected(self):
-        anns = {**_NFS_ANNOTATIONS_BASE, "sc.dsmlp.ucsd.edu/allowedNfsVolumes": ""}
+        anns = {**_NFS_ANNOTATIONS_BASE, "tritonai-admission-webhook/policy.allowedNfsVolumes": ""}
         result = validate_pod(anns, _nfs_spec(_NFS_VOL))
         assert result.allowed is False
 
     def test_nfs_volume_annotation_whitespace_only_rejected(self):
-        anns = {**_NFS_ANNOTATIONS_BASE, "sc.dsmlp.ucsd.edu/allowedNfsVolumes": "   "}
+        anns = {**_NFS_ANNOTATIONS_BASE, "tritonai-admission-webhook/policy.allowedNfsVolumes": "   "}
         result = validate_pod(anns, _nfs_spec(_NFS_VOL))
         assert result.allowed is False
 
@@ -1173,21 +1173,21 @@ class TestAllowedNfsVolumes:
     # ------------------------------------------------------------------ #
 
     def test_exact_match_allowed(self):
-        anns = {**_NFS_ANNOTATIONS_BASE, "sc.dsmlp.ucsd.edu/allowedNfsVolumes": "10.20.5.3:/export/data"}
+        anns = {**_NFS_ANNOTATIONS_BASE, "tritonai-admission-webhook/policy.allowedNfsVolumes": "10.20.5.3:/export/data"}
         assert validate_pod(anns, _nfs_spec(_NFS_VOL)).allowed is True
 
     def test_exact_match_server_mismatch_rejected(self):
-        anns = {**_NFS_ANNOTATIONS_BASE, "sc.dsmlp.ucsd.edu/allowedNfsVolumes": "10.20.5.4:/export/data"}
+        anns = {**_NFS_ANNOTATIONS_BASE, "tritonai-admission-webhook/policy.allowedNfsVolumes": "10.20.5.4:/export/data"}
         result = validate_pod(anns, _nfs_spec(_NFS_VOL))
         assert result.allowed is False
 
     def test_exact_match_path_mismatch_rejected(self):
-        anns = {**_NFS_ANNOTATIONS_BASE, "sc.dsmlp.ucsd.edu/allowedNfsVolumes": "10.20.5.3:/export/other"}
+        anns = {**_NFS_ANNOTATIONS_BASE, "tritonai-admission-webhook/policy.allowedNfsVolumes": "10.20.5.3:/export/other"}
         result = validate_pod(anns, _nfs_spec(_NFS_VOL))
         assert result.allowed is False
 
     def test_multiple_exact_patterns_or_semantics(self):
-        anns = {**_NFS_ANNOTATIONS_BASE, "sc.dsmlp.ucsd.edu/allowedNfsVolumes": "itsnfs:/scratch,10.20.5.3:/export/data"}
+        anns = {**_NFS_ANNOTATIONS_BASE, "tritonai-admission-webhook/policy.allowedNfsVolumes": "itsnfs:/scratch,10.20.5.3:/export/data"}
         assert validate_pod(anns, _nfs_spec(_NFS_VOL)).allowed is True
 
     # ------------------------------------------------------------------ #
@@ -1196,18 +1196,18 @@ class TestAllowedNfsVolumes:
 
     def test_glob_server_wildcard_allowed(self):
         vol = {"name": "v", "nfs": {"server": "its-dsmlp-fs03", "path": "/export/workspaces/PROJ_TEST"}}
-        anns = {**_NFS_ANNOTATIONS_BASE, "sc.dsmlp.ucsd.edu/allowedNfsVolumes": "its-dsmlp-fs0[1-9]:/export/workspaces/*"}
+        anns = {**_NFS_ANNOTATIONS_BASE, "tritonai-admission-webhook/policy.allowedNfsVolumes": "its-dsmlp-fs0[1-9]:/export/workspaces/*"}
         assert validate_pod(anns, _nfs_spec(vol)).allowed is True
 
     def test_glob_path_wildcard_allowed(self):
         vol = {"name": "v", "nfs": {"server": "itsnfs", "path": "/scratch/proj"}}
-        anns = {**_NFS_ANNOTATIONS_BASE, "sc.dsmlp.ucsd.edu/allowedNfsVolumes": "itsnfs:/scratch/*"}
+        anns = {**_NFS_ANNOTATIONS_BASE, "tritonai-admission-webhook/policy.allowedNfsVolumes": "itsnfs:/scratch/*"}
         assert validate_pod(anns, _nfs_spec(vol)).allowed is True
 
     def test_glob_outside_range_rejected(self):
         # its-dsmlp-fs0[1-9] does not match its-dsmlp-fs10
         vol = {"name": "v", "nfs": {"server": "its-dsmlp-fs10", "path": "/export/workspaces/PROJ"}}
-        anns = {**_NFS_ANNOTATIONS_BASE, "sc.dsmlp.ucsd.edu/allowedNfsVolumes": "its-dsmlp-fs0[1-9]:/export/workspaces/*"}
+        anns = {**_NFS_ANNOTATIONS_BASE, "tritonai-admission-webhook/policy.allowedNfsVolumes": "its-dsmlp-fs0[1-9]:/export/workspaces/*"}
         result = validate_pod(anns, _nfs_spec(vol))
         assert result.allowed is False
 
@@ -1215,7 +1215,7 @@ class TestAllowedNfsVolumes:
         """Reproduce the example from the requirements."""
         anns = {
             **_NFS_ANNOTATIONS_BASE,
-            "sc.dsmlp.ucsd.edu/allowedNfsVolumes": (
+            "tritonai-admission-webhook/policy.allowedNfsVolumes": (
                 "10.20.5.3:/export/data,"
                 "itsnfs:/scratch,"
                 "its-dsmlp-fs03:/export/workspaces/PROJ_TEST"
@@ -1229,13 +1229,13 @@ class TestAllowedNfsVolumes:
     # ------------------------------------------------------------------ #
 
     def test_multiple_nfs_all_allowed(self):
-        anns = {**_NFS_ANNOTATIONS_BASE, "sc.dsmlp.ucsd.edu/allowedNfsVolumes": "nfs1:/data,nfs2:/data"}
+        anns = {**_NFS_ANNOTATIONS_BASE, "tritonai-admission-webhook/policy.allowedNfsVolumes": "nfs1:/data,nfs2:/data"}
         vol1 = {"name": "v1", "nfs": {"server": "nfs1", "path": "/data"}}
         vol2 = {"name": "v2", "nfs": {"server": "nfs2", "path": "/data"}}
         assert validate_pod(anns, _nfs_spec(vol1, vol2)).allowed is True
 
     def test_multiple_nfs_one_disallowed_rejected(self):
-        anns = {**_NFS_ANNOTATIONS_BASE, "sc.dsmlp.ucsd.edu/allowedNfsVolumes": "nfs1:/data"}
+        anns = {**_NFS_ANNOTATIONS_BASE, "tritonai-admission-webhook/policy.allowedNfsVolumes": "nfs1:/data"}
         vol1 = {"name": "v1", "nfs": {"server": "nfs1", "path": "/data"}}
         vol2 = {"name": "v2", "nfs": {"server": "nfs2", "path": "/data"}}
         result = validate_pod(anns, _nfs_spec(vol1, vol2))
@@ -1247,7 +1247,7 @@ class TestAllowedNfsVolumes:
     # ------------------------------------------------------------------ #
 
     def test_nfs_alongside_allowed_types_ok(self):
-        anns = {**_NFS_ANNOTATIONS_BASE, "sc.dsmlp.ucsd.edu/allowedNfsVolumes": "10.20.5.3:/export/data"}
+        anns = {**_NFS_ANNOTATIONS_BASE, "tritonai-admission-webhook/policy.allowedNfsVolumes": "10.20.5.3:/export/data"}
         spec = _pod(
             pod_sc={"runAsNonRoot": True},
             containers=[_container(sc={"runAsUser": 1000})],
@@ -1263,8 +1263,8 @@ class TestAllowedNfsVolumes:
 # Toleration allowlist constraint
 # ---------------------------------------------------------------------------
 
-_TOL_ANNOTATIONS_BASE = {"sc.dsmlp.ucsd.edu/runAsUser": "1000"}
-_TOL_KEY = "sc.dsmlp.ucsd.edu/tolerations"
+_TOL_ANNOTATIONS_BASE = {"tritonai-admission-webhook/policy.runAsUser": "1000"}
+_TOL_KEY = "tritonai-admission-webhook/policy.tolerations"
 
 
 def _tol_spec(*tolerations: dict) -> dict:

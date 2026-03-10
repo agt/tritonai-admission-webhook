@@ -41,7 +41,7 @@ spec:
             values:
               - tgptinf-system
               - kube-system
-          - key: validator.sc.dsmlp.ucsd.edu
+          - key: validator.tritonai-admission-webhook
             operator: In
             values:
             - enabled
