@@ -41,6 +41,8 @@ metadata:
 The following constraints are **always enforced** on every pod that passes through the
 Validation webhook.  They are not configurable via namespace annotations.
 
+The Mutation webhook will also preemptively set `securityContext.runAsNonRoot: true` for each Pod missing that attribute.  (A pod explicitly configured with `securityContext.runAsNonRoot: false` will pass through to the Validator where it will be rejected.)
+
 ### Pod-level
 
 | Field | Allowed values | Semantics |
