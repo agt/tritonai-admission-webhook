@@ -25,15 +25,13 @@ metadata:
     tritonai-admission-webhook/policy.supplementalGroups: "1000,2000-3000"
     tritonai-admission-webhook/policy.nodeLabel: "partition=gpu,partition=cpu"
     tritonai-admission-webhook/policy.tolerations: "node-type=its-ai*:NoSchedule,glean-node=*:NoExecute"
+    tritonai-admission-webhook/policy.allowedNfsVolumes: "10.20.5.3:/export/data,itsnfs:/scratch,its-dsmlp-fs0[1-9]:/export/workspaces/*"
+    tritonai-admission-webhook/policy.prohibitedVolumeTypes: "emptyDir,secret"
     # Default annotations (used by the mutator to fill in absent fields)
     tritonai-admission-webhook/default.runAsUser: "1000"
     tritonai-admission-webhook/default.runAsGroup: "1000"
     tritonai-admission-webhook/default.nodeLabel: "partition=gpu"
     tritonai-admission-webhook/default.tolerations: "node-type=its-ai:NoSchedule"
-    # NFS volume allowlist (see below)
-    tritonai-admission-webhook/policy.allowedNfsVolumes: "10.20.5.3:/export/data,itsnfs:/scratch,its-dsmlp-fs0[1-9]:/export/workspaces/*"
-    # Optionally remove types from the hardcoded permitted volume type set (see below)
-    tritonai-admission-webhook/policy.prohibitedVolumeTypes: "emptyDir,secret"
 ```
 
 ---
