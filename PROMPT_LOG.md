@@ -234,3 +234,19 @@ Propagate this change to code as well as README.md and deployment artifacts.
 # Shared pod helper refactor
 
 Extract duplicated container/securityContext helper functions (_pod_sc, _all_containers, _container_sc, _container_name, _is_node_kubernetes_toleration) into a shared app/pod_helpers.py module imported by both the mutator and validator. Remove the redundant _CONTAINER_KINDS constant from the mutator and simplify _any_container_missing_field to use _all_containers().
+
+# ConfigMap-based policy lookup
+
+As an alternative to annotating each namespace directly, add support for storing policies in ConfigMaps within the webhook's own namespace, mapped to subject namespaces via their labels. Implement a two-level lookup: an index ConfigMap maps "label=value" strings to policy ConfigMap names; matching policy ConfigMaps are fetched and merged in lexical order of the matching label=value key. Cache both the index and per-policy ConfigMaps with a configurable TTL; degrade gracefully on fetch errors. If no index entry matches the namespace's labels, fall back to namespace annotations as before.
+
+# Remove WEBHOOK_NAMESPACE environment variable
+
+Remove the WEBHOOK_NAMESPACE environment variable and just read the service account file directly (/var/run/secrets/kubernetes.io/serviceaccount/namespace), falling back to a hardcoded default only for local dev.
+
+# Accept prefix-free keys in policy ConfigMaps
+
+Do not require ConfigMap entries to bear the configurable annotation prefix. Accept a ConfigMap key of "policy.runAsUser" as well as "arbitrary-prefix/policy.runAsUser" — strip any leading prefix and normalise to the canonical ANNOTATION_NS form.
+
+# Merge namespace annotations into ConfigMap policy result
+
+When a namespace has labels matching the ConfigMap index but also bears annotations, incorporate those annotations into the ConfigMap merge logic. Namespace annotations should override corresponding policies/defaults within ConfigMaps.
