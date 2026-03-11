@@ -311,6 +311,62 @@ class TestGetNamespaceSecurityAnnotations:
             nc.get_namespace_security_annotations("my-ns")
         mock_resolve.assert_called_once_with({"env": "prod", "team": "research"})
 
+    def test_ns_annotations_override_configmap_on_conflict(self):
+        """Namespace annotations with the right prefix override ConfigMap values."""
+        cm_policy = {
+            "tritonai-admission-webhook/policy.runAsUser": "1000",
+            "tritonai-admission-webhook/policy.runAsGroup": "2000",
+        }
+        ns_annotations = {
+            "tritonai-admission-webhook/policy.runAsUser": "9999",  # overrides CM
+            "unrelated/annotation": "ignored",
+        }
+        ns = _make_ns(labels={"team": "gpu"}, annotations=ns_annotations)
+        api = MagicMock()
+        api.read_namespace.return_value = ns
+        with (
+            patch.object(nc, "_get_core_v1_api", return_value=api),
+            patch.object(nc, "_resolve_configmap_policy", return_value=cm_policy),
+        ):
+            result = nc.get_namespace_security_annotations("my-ns")
+        assert result["tritonai-admission-webhook/policy.runAsUser"] == "9999"
+        assert result["tritonai-admission-webhook/policy.runAsGroup"] == "2000"
+        assert "unrelated/annotation" not in result
+
+    def test_ns_annotations_extend_configmap(self):
+        """Namespace annotations not present in the ConfigMap are added to the result."""
+        cm_policy = {"tritonai-admission-webhook/policy.runAsUser": "1000"}
+        ns_annotations = {"tritonai-admission-webhook/policy.nodeLabel": "partition=gpu"}
+        ns = _make_ns(labels={"team": "gpu"}, annotations=ns_annotations)
+        api = MagicMock()
+        api.read_namespace.return_value = ns
+        with (
+            patch.object(nc, "_get_core_v1_api", return_value=api),
+            patch.object(nc, "_resolve_configmap_policy", return_value=cm_policy),
+        ):
+            result = nc.get_namespace_security_annotations("my-ns")
+        assert result == {
+            "tritonai-admission-webhook/policy.runAsUser": "1000",
+            "tritonai-admission-webhook/policy.nodeLabel": "partition=gpu",
+        }
+
+    def test_non_prefixed_ns_annotations_excluded_in_configmap_path(self):
+        """Annotations without ANNOTATION_NS prefix are excluded even on the CM path."""
+        cm_policy = {"tritonai-admission-webhook/policy.runAsUser": "1000"}
+        ns_annotations = {
+            "other-tool/some-annotation": "value",
+            "bare-annotation": "value",
+        }
+        ns = _make_ns(labels={"team": "gpu"}, annotations=ns_annotations)
+        api = MagicMock()
+        api.read_namespace.return_value = ns
+        with (
+            patch.object(nc, "_get_core_v1_api", return_value=api),
+            patch.object(nc, "_resolve_configmap_policy", return_value=cm_policy),
+        ):
+            result = nc.get_namespace_security_annotations("my-ns")
+        assert result == {"tritonai-admission-webhook/policy.runAsUser": "1000"}
+
 
 # ---------------------------------------------------------------------------
 # _normalise_cm_key

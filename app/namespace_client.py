@@ -264,13 +264,11 @@ def get_namespace_security_annotations(namespace: str) -> dict[str, str]:
         logger.exception("Unexpected error fetching namespace %r", namespace)
         return {}
 
+    ns_own = {k: v for k, v in annotations.items() if k.startswith(ANNOTATION_NS)}
+
     cm_policy = _resolve_configmap_policy(labels)
     if cm_policy is not None:
-        return cm_policy
+        # Merge: namespace annotations override ConfigMap entries on conflict.
+        return {**cm_policy, **ns_own}
 
-    # Fall back: namespace's own annotations.
-    return {
-        key: value
-        for key, value in annotations.items()
-        if key.startswith(ANNOTATION_NS)
-    }
+    return ns_own
