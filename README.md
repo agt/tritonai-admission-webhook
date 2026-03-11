@@ -336,7 +336,7 @@ As an alternative to annotating each namespace directly, policies can be stored 
 
 1. Create a **policy index** ConfigMap (default name: `pod-security-policy-index`) in the webhook's namespace.  Each key is a `label=value` string; each value is the name of a policy ConfigMap in the same namespace.
 
-2. Create one or more **policy ConfigMaps** whose `data` entries use the exact same key/value format as namespace annotations:
+2. Create one or more **policy ConfigMaps** whose `data` entries use the same key/value format as namespace annotations. Keys may be written in bare form (prefix optional) or with the full annotation prefix — both are accepted:
 
 ```yaml
 # Policy index
@@ -350,17 +350,19 @@ data:
   "tier=gpu":      gpu-policy
 
 ---
-# A policy ConfigMap — same structure as namespace annotations
+# A policy ConfigMap — bare keys (prefix omitted) are the recommended form
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: gpu-policy
   namespace: tgptinf-system
 data:
-  tritonai-admission-webhook/policy.runAsUser: "1000,>5000000"
-  tritonai-admission-webhook/policy.nodeLabel: "partition=gpu"
-  tritonai-admission-webhook/default.runAsUser: "1000"
-  tritonai-admission-webhook/default.nodeLabel: "partition=gpu"
+  policy.runAsUser: "1000,>5000000"   # bare key — annotation prefix optional
+  policy.nodeLabel: "partition=gpu"
+  default.runAsUser: "1000"
+  default.nodeLabel: "partition=gpu"
+  # full-prefix form is equally valid:
+  # tritonai-admission-webhook/policy.runAsUser: "1000,>5000000"
 ```
 
 3. Label the subject namespaces — no annotations needed:
@@ -374,7 +376,7 @@ metadata:
 ### Lookup behaviour
 
 - All `label=value` pairs on the subject namespace are checked against the index.
-- If **one or more** entries match, their policy ConfigMaps are fetched and merged in **lexical order of the `label=value` key** (so conflicts resolve deterministically: the lexically-last matching label wins). Namespace annotations are **not** consulted.
+- If **one or more** entries match, their policy ConfigMaps are fetched and merged in **lexical order of the `label=value` key** (so conflicts resolve deterministically: the lexically-last matching label wins). The namespace's own `tritonai-admission-webhook/` annotations are then merged on top, so namespace annotations override ConfigMap entries on conflict. This allows per-namespace overrides without a separate ConfigMap.
 - If **no** index entry matches, the webhook falls back to the namespace's own annotations (existing behaviour).
 
 ### Caching
@@ -389,7 +391,6 @@ Both the index ConfigMap and each policy ConfigMap are cached for `POLICY_CACHE_
 |------------------------|--------------------------------|------------------------------------------------------------------------------------|
 | `LOG_LEVEL`            | `INFO`                         | Python logging level                                                               |
 | `ANNOTATION_PREFIX`    | `tritonai-admission-webhook`   | Prefix for all webhook namespace annotations (`policy.*`, `default.*`)             |
-| `WEBHOOK_NAMESPACE`    | *(auto-detected)*              | Namespace the webhook runs in; used for ConfigMap lookups. Auto-detected from the in-cluster service-account file when not set. |
 | `POLICY_INDEX_CONFIGMAP` | `pod-security-policy-index`  | Name of the index ConfigMap that maps `label=value` → policy ConfigMap name       |
 | `POLICY_CACHE_TTL`     | `600`                          | Seconds to cache the index and policy ConfigMaps (0 disables caching)             |
 | `PORT`                 | `8443`                         | Listening port (dev entrypoint only)                                               |
