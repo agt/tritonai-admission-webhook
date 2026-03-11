@@ -7,6 +7,7 @@ and out-of-cluster (kubeconfig) authentication transparently.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from functools import lru_cache
 
@@ -34,8 +35,8 @@ def _get_core_v1_api() -> client.CoreV1Api:
     return client.CoreV1Api()
 
 
-def get_namespace_security_annotations(namespace: str) -> dict[str, str]:
-    """Return a dict of ``<ANNOTATION_PREFIX>/*`` annotations from *namespace*.
+def _fetch_namespace_security_annotations(namespace: str) -> dict[str, str]:
+    """Synchronous implementation that fetches namespace annotations.
 
     Returns an empty dict if the namespace has no relevant annotations or
     cannot be retrieved (errors are logged but not re-raised so the webhook
@@ -64,3 +65,12 @@ def get_namespace_security_annotations(namespace: str) -> dict[str, str]:
     except Exception:
         logger.exception("Unexpected error fetching namespace %r annotations", namespace)
         return {}
+
+
+async def get_namespace_security_annotations(namespace: str) -> dict[str, str]:
+    """Return a dict of ``<ANNOTATION_PREFIX>/*`` annotations from *namespace*.
+
+    Runs the blocking Kubernetes API call in a thread pool via
+    ``asyncio.to_thread()`` so it does not block the event loop.
+    """
+    return await asyncio.to_thread(_fetch_namespace_security_annotations, namespace)
