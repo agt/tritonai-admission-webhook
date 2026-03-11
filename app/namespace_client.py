@@ -128,15 +128,37 @@ def _get_index() -> dict[str, str]:
     return data
 
 
+def _normalise_cm_key(key: str) -> str:
+    """Normalise a ConfigMap data key to a full annotation key.
+
+    Accepts any of:
+    - bare suffix:          ``policy.runAsUser``
+    - arbitrary prefix:     ``other-ns/policy.runAsUser``
+    - correct full key:     ``tritonai-admission-webhook/policy.runAsUser``
+
+    All three map to ``tritonai-admission-webhook/policy.runAsUser``.
+    """
+    if key.startswith(ANNOTATION_NS):
+        return key
+    suffix = key.split("/", 1)[-1]  # strips any leading "prefix/" if present
+    return f"{ANNOTATION_NS}{suffix}"
+
+
 def _get_policy_cm(name: str) -> dict[str, str]:
     """Return the data from the named policy ConfigMap, refreshing when stale.
 
     Policy ConfigMaps live in ``WEBHOOK_NAMESPACE`` and their ``data``
-    entries use the same key/value format as namespace annotations, e.g.::
+    entries can use the full annotation key or a shorter form::
 
         data:
+          policy.runAsUser: "1000,>5000000"          # bare suffix
+          default.runAsUser: "1000"                   # bare suffix
+          # or equivalently:
           tritonai-admission-webhook/policy.runAsUser: "1000,>5000000"
-          tritonai-admission-webhook/default.runAsUser: "1000"
+          arbitrary-prefix/default.runAsUser: "1000"  # any prefix stripped
+
+    All key forms are normalised to the canonical
+    ``<ANNOTATION_NS><suffix>`` form before being returned.
 
     On fetch errors the last cached value is reused; if none exists, an
     empty dict is returned so the webhook degrades gracefully.
@@ -154,7 +176,7 @@ def _get_policy_cm(name: str) -> dict[str, str]:
     try:
         api = _get_core_v1_api()
         cm = api.read_namespaced_config_map(name, WEBHOOK_NAMESPACE)
-        data = cm.data or {}
+        data = {_normalise_cm_key(k): v for k, v in (cm.data or {}).items()}
         logger.debug(
             "Loaded policy ConfigMap %r/%r (%d keys)", WEBHOOK_NAMESPACE, name, len(data)
         )

@@ -310,3 +310,65 @@ class TestGetNamespaceSecurityAnnotations:
         ):
             nc.get_namespace_security_annotations("my-ns")
         mock_resolve.assert_called_once_with({"env": "prod", "team": "research"})
+
+
+# ---------------------------------------------------------------------------
+# _normalise_cm_key
+# ---------------------------------------------------------------------------
+
+
+class TestNormaliseCmKey:
+    """Unit tests for the ConfigMap key normalisation helper."""
+
+    NS = "tritonai-admission-webhook/"
+
+    def test_full_key_unchanged(self):
+        key = "tritonai-admission-webhook/policy.runAsUser"
+        assert nc._normalise_cm_key(key) == key
+
+    def test_bare_policy_key_prefixed(self):
+        assert nc._normalise_cm_key("policy.runAsUser") == (
+            "tritonai-admission-webhook/policy.runAsUser"
+        )
+
+    def test_bare_default_key_prefixed(self):
+        assert nc._normalise_cm_key("default.runAsUser") == (
+            "tritonai-admission-webhook/default.runAsUser"
+        )
+
+    def test_arbitrary_prefix_replaced(self):
+        assert nc._normalise_cm_key("other-ns/policy.runAsUser") == (
+            "tritonai-admission-webhook/policy.runAsUser"
+        )
+
+    def test_get_policy_cm_normalises_keys(self):
+        """_get_policy_cm should normalise all key forms to canonical keys."""
+        _reset_caches()
+        raw_data = {
+            "policy.runAsUser": "1000",                              # bare
+            "other/policy.runAsGroup": "2000",                      # arbitrary prefix
+            "tritonai-admission-webhook/default.runAsUser": "500",  # already canonical
+        }
+        api = MagicMock()
+        api.read_namespaced_config_map.return_value = _make_cm(raw_data)
+        with patch.object(nc, "_get_core_v1_api", return_value=api):
+            result = nc._get_policy_cm("test-policy")
+        assert result == {
+            "tritonai-admission-webhook/policy.runAsUser": "1000",
+            "tritonai-admission-webhook/policy.runAsGroup": "2000",
+            "tritonai-admission-webhook/default.runAsUser": "500",
+        }
+
+    def test_collision_last_value_wins(self):
+        """When two raw keys normalise to the same canonical key, the last one wins."""
+        _reset_caches()
+        # dict preserves insertion order in Python 3.7+
+        raw_data = {
+            "policy.runAsUser": "first",
+            "other/policy.runAsUser": "last",
+        }
+        api = MagicMock()
+        api.read_namespaced_config_map.return_value = _make_cm(raw_data)
+        with patch.object(nc, "_get_core_v1_api", return_value=api):
+            result = nc._get_policy_cm("test-policy")
+        assert result == {"tritonai-admission-webhook/policy.runAsUser": "last"}
