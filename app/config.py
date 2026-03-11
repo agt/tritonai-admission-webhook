@@ -13,12 +13,9 @@ DEFAULT_PREFIX: str = f"{ANNOTATION_NS}default."
 def _detect_webhook_namespace() -> str:
     """Return the namespace this webhook runs in.
 
-    Prefers the WEBHOOK_NAMESPACE env var; falls back to the in-cluster
-    service-account namespace file when running inside a pod.
+    Reads the in-cluster service-account namespace file; falls back to a
+    hardcoded default for local development outside a pod.
     """
-    ns = os.environ.get("WEBHOOK_NAMESPACE")
-    if ns:
-        return ns
     try:
         with open("/var/run/secrets/kubernetes.io/serviceaccount/namespace") as f:
             return f.read().strip()
