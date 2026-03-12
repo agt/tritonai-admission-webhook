@@ -19,13 +19,13 @@ metadata:
   name: my-app
   annotations:
     # Constraint annotations (enforced by the validator)
-    tritonai-admission-webhook/policy.runAsUser: "1000,2000-3000,>5000000"
+    tritonai-admission-webhook/policy.runAsUser: "1000,2000-3000,>5000000,!0"
     tritonai-admission-webhook/policy.runAsGroup: "1000"
     tritonai-admission-webhook/policy.fsGroup: "1000"
     tritonai-admission-webhook/policy.supplementalGroups: "1000,2000-3000"
     tritonai-admission-webhook/policy.nodeLabel: "partition=gpu,partition=cpu"
-    tritonai-admission-webhook/policy.tolerations: "node-type=its-ai*:NoSchedule,glean-node=*:NoExecute"
-    tritonai-admission-webhook/policy.allowedNfsVolumes: "10.20.5.3:/export/data,itsnfs:/scratch,its-dsmlp-fs0[1-9]:/export/workspaces/*"
+    tritonai-admission-webhook/policy.tolerations: "node-type=its-ai*:NoSchedule,glean-node=*:NoExecute,!node-type=gpu:NoSchedule"
+    tritonai-admission-webhook/policy.allowedNfsVolumes: "10.20.5.3:/export/data,itsnfs:/scratch,its-dsmlp-fs0[1-9]:/export/workspaces/*,!badserver:*"
     tritonai-admission-webhook/policy.prohibitedVolumeTypes: "emptyDir,secret"
     # Default annotations (used by the mutator to fill in absent fields)
     tritonai-admission-webhook/default.runAsUser: "1000"
@@ -77,7 +77,7 @@ _Mutator_:  If any Container-level `securityContext` is missing runAsUser/runAsG
 
 _Validator_: If the **Pod-level** `securityContext` sets the field, it must match.  All **container** `securityContext`s that set the field must match.  If the Pod-level `securityContext` is **absent** (or does not set the field), **every** container must supply the field and it must match.
 
-Validator accepts a comma-separated list of tokens forming a `ConstraintSet` with OR semantics. The supported token forms for `runAsUser` and `runAsGroup` are:
+Validator accepts a comma-separated list of tokens forming a `ConstraintSet`. The supported token forms for `runAsUser` and `runAsGroup` are:
 
 | Token | Example | Matches |
 |---|---|---|
@@ -87,7 +87,17 @@ Validator accepts a comma-separated list of tokens forming a `ConstraintSet` wit
 | Less-than | `<500` | x < 500 |
 | Greater-or-equal | `>=1000` | x ≥ 1000 |
 | Less-or-equal | `<=1000` | x ≤ 1000 |
+| Negated | `!1000` | any value except 1000 |
 
+Any token can be prefixed with `!` to negate it (e.g. `!1000`, `!2000-3000`, `!>500`).
+
+**Positive** tokens use **OR** semantics (at least one must match). **Negated** tokens use **AND** semantics (all must be satisfied). When both are present, both conditions must hold.
+
+| Annotation value | Semantics |
+|---|---|
+| `1000,2000-3000` | value == 1000 OR 2000 ≤ value ≤ 3000 |
+| `!0` | value ≠ 0 |
+| `1000,2000,!3000` | (value == 1000 OR value == 2000) AND value ≠ 3000 |
 
 ``` tritonai-admission-webhook/policy.runAsUser: "1000,2000-3000,>5000000" ```produces four constraints joined by OR — a user ID satisfies the annotation if it matches **any** of them. The same parser is shared by `runAsUser`, `runAsGroup`, `fsGroup`, and `supplementalGroups`.
 
@@ -113,6 +123,8 @@ _Validator_:   `pod.spec.nodeSelector` must contain at least one entry matching 
   annotation's `key=value` tokens.  **Additionally**, ensures `pod.spec.nodeName` is **absent**.  _(Setting `nodeName` bypasses the scheduler and the `nodeSelector` check entirely, so it is never permitted when this annotation is present.)_
 
 
+Tokens may be negated: `!key=value` means the pod's `nodeSelector` must **not** contain that pair.
+
 Example — namespace annotation `"rack=b,rack=c"` would:
 
 | Pod nodeSelector              | Result  | Reason                             |
@@ -123,17 +135,26 @@ Example — namespace annotation `"rack=b,rack=c"` would:
 | `{}` or absent                | Rejected | no token matches                  |
 | any spec with `nodeName` set  | Rejected | `nodeName` bypass is forbidden     |
 
+Example with negation — `"rack=b,rack=c,!rack=restricted"`:
+
+| Pod nodeSelector       | Result   | Reason                                         |
+|------------------------|----------|-------------------------------------------------|
+| `{rack: b}`            | Allowed  | matches positive `rack=b`, not negated          |
+| `{rack: restricted}`   | Rejected | matches negated `!rack=restricted`              |
+
 
 
 ### `tritonai-admission-webhook/policy.allowedNfsVolumes`
 
-_Validator_: If the annotation is **absent or empty**, no NFS volumes are permitted. If NFS volumes are present, **each** must match at least one entry in the comma-separated allowlist.
+_Validator_: If the annotation is **absent or empty**, no NFS volumes are permitted. If NFS volumes are present, **each** must match at least one positive (non-negated) entry in the comma-separated allowlist, and must **not** match any negated entry.
 
 A match is either an exact `server:/path` string or a **shell glob** (fnmatch) pattern,
   e.g. `its-dsmlp-fs0[1-9]:/export/workspaces/*FA25`.
 
+Entries prefixed with `!` are negated — **none** of the pod's NFS volumes may match a negated pattern. Positive and negated entries follow the same AND/OR split as other constraints.
+
 ```
-tritonai-admission-webhook/policy.allowedNfsVolumes: "10.20.5.3:/export/data,itsnfs:/scratch,its-dsmlp-fs0[1-9]:/export/workspaces/*"
+tritonai-admission-webhook/policy.allowedNfsVolumes: "10.20.5.3:/export/data,itsnfs:/scratch,!badserver:/sensitive/*"
 ```
 
 A pod with no NFS volumes is always accepted regardless of this annotation.
@@ -171,7 +192,7 @@ tritonai-admission-webhook/policy.prohibitedVolumeTypes: "emptyDir,secret"
 
 _Mutator_: Injects a list of `key=value:effect` defaults into `spec.tolerations` only when the pod's toleration list is **absent or empty**. (Kubernetes-internal tolerations ignored when deciding whether to inject.) If an entry's `value` is `*`, the injected toleration uses `operator: Exists` (no `value` field); otherwise the injected toleration uses `operator: Equal` and the supplied value.
 
-_Validator_: Ensures every pod spec Toleration falls within the list of comma-separated `key=value:effect` tokens.  
+_Validator_: Ensures every pod spec Toleration falls within the list of comma-separated `key=value:effect` tokens. Entries prefixed with `!` are negated — **none** of the pod's tolerations may match a negated entry.
 
 Globs (`fnmatch` style) may appear in **any** field (key, value, or effect).  The special value `*` additionally covers tolerations that use `operator: Exists` (which carry no `value` field).
 
@@ -180,6 +201,7 @@ Globs (`fnmatch` style) may appear in **any** field (key, value, or effect).  Th
 | `key=value:effect` | `node-type=its-ai:NoSchedule` | Equal operator, exact value match |
 | `key=*:effect` | `node-type=*:NoSchedule` | Wildcard value — matches Equal (any value) **and** Exists (no value) |
 | `key=glob*:effect` | `node-type=its-ai*:NoSchedule` | fnmatch glob in value field |
+| `!key=value:effect` | `!node-type=gpu:NoSchedule` | Negated — pod must **not** have this toleration |
 
 
 
@@ -312,7 +334,7 @@ kubectl apply -f deploy/webhook.yaml
 
 ## Extending with New Constraints
 
-1. **New numeric operator** (e.g. `!=`) — add a `Constraint` subclass in
+1. **New numeric operator** (e.g. modulo) — add a `Constraint` subclass in
    `app/constraints/numeric.py` and handle the token pattern in `_parse_numeric_token`.
 
 2. **New string constraint type** (e.g. glob matching) — create
@@ -325,6 +347,10 @@ kubectl apply -f deploy/webhook.yaml
 4. **New annotation-driven constraint that doesn't fit the ConstraintSet model** (e.g. glob
    patterns, structured values) — implement a dedicated validation function in `app/validator.py`
    and call it from `validate_pod()`, following the pattern of `_validate_nfs_volumes()`.
+
+### Negation support
+
+All constraint tokens support a `!` prefix for negation. Within a `ConstraintSet`, positive tokens are OR-ed and negated tokens are AND-ed. When implementing a new parser, handle the `!` prefix in your token parsing function by stripping it, parsing the remainder normally, and wrapping the result in `NegatedConstraint(inner)` from `app/constraints/base.py`. For non-ConstraintSet constraints (NFS volumes, tolerations), split tokens into positive and negated lists and check negated patterns first (none may match), then positive patterns (at least one must match if any exist).
 
 ---
 
@@ -391,7 +417,7 @@ Both the index ConfigMap and each policy ConfigMap are cached for `POLICY_CACHE_
 |------------------------|--------------------------------|------------------------------------------------------------------------------------|
 | `LOG_LEVEL`            | `INFO`                         | Python logging level                                                               |
 | `ANNOTATION_PREFIX`    | `tritonai-admission-webhook`   | Prefix for all webhook namespace annotations (`policy.*`, `default.*`)             |
-| `POLICY_INDEX_CONFIGMAP` | `pod-security-policy-index`  | Name of the index ConfigMap that maps `label=value` → policy ConfigMap name       |
+| `POLICY_INDEX_CONFIGMAP` | `pod-security-policy-index`  | Name of the index ConfigMap that maps `label.value` → policy ConfigMap name       |
 | `POLICY_CACHE_TTL`     | `600`                          | Seconds to cache the index and policy ConfigMaps (0 disables caching)             |
 | `PORT`                 | `8443`                         | Listening port (dev entrypoint only)                                               |
 | `TLS_KEY_FILE`         | —                              | Path to TLS private key                                                            |

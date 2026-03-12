@@ -1409,3 +1409,276 @@ class TestValidateTolerations:
         ok_tol = {"key": "node-type", "operator": "Equal", "value": "its-ai", "effect": "NoSchedule"}
         result = validate_pod(anns, _tol_spec(sys_tol, ok_tol))
         assert result.allowed is True
+
+
+# ---------------------------------------------------------------------------
+# Negation operator integration tests
+# ---------------------------------------------------------------------------
+
+_P = "tritonai-admission-webhook/policy."
+
+
+class TestNegationIntegration:
+    """End-to-end validation tests for the ! negation operator."""
+
+    def test_required_scalar_negated_value_rejected(self):
+        """runAsUser=!1000 → uid 1000 is denied."""
+        anns = {f"{_P}runAsUser": "!1000"}
+        spec = _pod(
+            pod_sc={"runAsNonRoot": True, "runAsUser": 1000},
+            containers=[_container(sc={"allowPrivilegeEscalation": False})],
+        )
+        result = validate_pod(anns, spec)
+        assert result.allowed is False
+        assert "runAsUser" in result.message
+
+    def test_required_scalar_negated_value_allowed(self):
+        """runAsUser=!1000 → uid 2000 is allowed."""
+        anns = {f"{_P}runAsUser": "!1000"}
+        spec = _pod(
+            pod_sc={"runAsNonRoot": True, "runAsUser": 2000},
+            containers=[_container(sc={"allowPrivilegeEscalation": False})],
+        )
+        result = validate_pod(anns, spec)
+        assert result.allowed is True
+
+    def test_required_scalar_mixed_positive_and_negated(self):
+        """runAsUser=1000,2000,!3000 → 1000 ok, 3000 denied, 999 denied."""
+        anns = {f"{_P}runAsUser": "1000,2000,!3000"}
+        base_sc = {"runAsNonRoot": True}
+        containers = [_container(sc={"allowPrivilegeEscalation": False})]
+
+        # 1000 → allowed (positive match, not negated)
+        spec = _pod(pod_sc={**base_sc, "runAsUser": 1000}, containers=containers)
+        assert validate_pod(anns, spec).allowed is True
+
+        # 3000 → denied (negated)
+        spec = _pod(pod_sc={**base_sc, "runAsUser": 3000}, containers=containers)
+        assert validate_pod(anns, spec).allowed is False
+
+        # 999 → denied (no positive match)
+        spec = _pod(pod_sc={**base_sc, "runAsUser": 999}, containers=containers)
+        assert validate_pod(anns, spec).allowed is False
+
+    def test_optional_list_negated_blocks_entry(self):
+        """supplementalGroups=!5000 → a group list containing 5000 is denied."""
+        anns = {
+            f"{_P}runAsUser": "1000",
+            f"{_P}supplementalGroups": "!5000",
+        }
+        spec = _pod(
+            pod_sc={"runAsNonRoot": True, "runAsUser": 1000, "supplementalGroups": [5000]},
+            containers=[_container(sc={"allowPrivilegeEscalation": False})],
+        )
+        result = validate_pod(anns, spec)
+        assert result.allowed is False
+        assert "supplementalGroups" in result.message
+
+    def test_optional_list_negated_allows_other(self):
+        """supplementalGroups=!5000 → a group list without 5000 is allowed."""
+        anns = {
+            f"{_P}runAsUser": "1000",
+            f"{_P}supplementalGroups": "!5000",
+        }
+        spec = _pod(
+            pod_sc={"runAsNonRoot": True, "runAsUser": 1000, "supplementalGroups": [6000, 7000]},
+            containers=[_container(sc={"allowPrivilegeEscalation": False})],
+        )
+        result = validate_pod(anns, spec)
+        assert result.allowed is True
+
+    def test_node_label_negated_blocks_label(self):
+        """nodeLabel=!partition=gpu → nodeSelector with partition=gpu is denied."""
+        anns = {
+            f"{_P}runAsUser": "1000",
+            f"{_P}nodeLabel": "!partition=gpu",
+        }
+        spec = _pod(
+            pod_sc={"runAsNonRoot": True, "runAsUser": 1000},
+            containers=[_container(sc={"allowPrivilegeEscalation": False})],
+        )
+        spec["nodeSelector"] = {"partition": "gpu"}
+        result = validate_pod(anns, spec)
+        assert result.allowed is False
+        assert "nodeLabel" in result.message.lower() or "nodeSelector" in result.message
+
+    def test_node_label_negated_allows_other(self):
+        """nodeLabel=partition=cpu,!partition=gpu → partition=cpu is allowed."""
+        anns = {
+            f"{_P}runAsUser": "1000",
+            f"{_P}nodeLabel": "partition=cpu,!partition=gpu",
+        }
+        spec = _pod(
+            pod_sc={"runAsNonRoot": True, "runAsUser": 1000},
+            containers=[_container(sc={"allowPrivilegeEscalation": False})],
+        )
+        spec["nodeSelector"] = {"partition": "cpu"}
+        result = validate_pod(anns, spec)
+        assert result.allowed is True
+
+
+# ---------------------------------------------------------------------------
+# NFS volume negation tests
+# ---------------------------------------------------------------------------
+
+_NFS_KEY = "tritonai-admission-webhook/policy.allowedNfsVolumes"
+_NFS_VOL_A = {"name": "nfs-a", "nfs": {"server": "10.0.0.1", "path": "/data"}}
+_NFS_VOL_B = {"name": "nfs-b", "nfs": {"server": "10.0.0.2", "path": "/scratch"}}
+
+
+def _nfs_neg_spec(*vols: dict) -> dict:
+    return _pod(
+        pod_sc={"runAsNonRoot": True},
+        containers=[_container(sc={"runAsUser": 1000})],
+        volumes=list(vols),
+    )
+
+
+class TestNfsNegation:
+    """Tests for negated patterns in allowedNfsVolumes."""
+
+    def test_negated_pattern_blocks_matching_volume(self):
+        anns = {**_ALWAYS_ANNOTATIONS, _NFS_KEY: "!10.0.0.1:/data"}
+        result = validate_pod(anns, _nfs_neg_spec(_NFS_VOL_A))
+        assert result.allowed is False
+        assert "nfs-a" in result.message
+        assert "negated" in result.message.lower()
+
+    def test_negated_pattern_allows_non_matching_volume(self):
+        anns = {**_ALWAYS_ANNOTATIONS, _NFS_KEY: "!10.0.0.1:/data"}
+        result = validate_pod(anns, _nfs_neg_spec(_NFS_VOL_B))
+        assert result.allowed is True
+
+    def test_negated_glob_blocks_matching_volume(self):
+        anns = {**_ALWAYS_ANNOTATIONS, _NFS_KEY: "!10.0.0.1:*"}
+        result = validate_pod(anns, _nfs_neg_spec(_NFS_VOL_A))
+        assert result.allowed is False
+
+    def test_negated_glob_allows_non_matching(self):
+        anns = {**_ALWAYS_ANNOTATIONS, _NFS_KEY: "!10.0.0.1:*"}
+        result = validate_pod(anns, _nfs_neg_spec(_NFS_VOL_B))
+        assert result.allowed is True
+
+    def test_mixed_positive_and_negated(self):
+        """Positive pattern allows 10.0.0.2:/scratch, negated blocks 10.0.0.1:/data."""
+        anns = {**_ALWAYS_ANNOTATIONS, _NFS_KEY: "10.0.0.2:/scratch,!10.0.0.1:/data"}
+        # VOL_B matches positive, not blocked by negation
+        assert validate_pod(anns, _nfs_neg_spec(_NFS_VOL_B)).allowed is True
+        # VOL_A blocked by negation
+        assert validate_pod(anns, _nfs_neg_spec(_NFS_VOL_A)).allowed is False
+
+    def test_mixed_positive_and_negated_no_positive_match(self):
+        """Volume not matching positive set and not blocked by negation → rejected."""
+        anns = {**_ALWAYS_ANNOTATIONS, _NFS_KEY: "10.0.0.9:/other,!10.0.0.1:/data"}
+        result = validate_pod(anns, _nfs_neg_spec(_NFS_VOL_B))
+        assert result.allowed is False
+        assert "does not match" in result.message
+
+    def test_multiple_negated_patterns(self):
+        anns = {**_ALWAYS_ANNOTATIONS, _NFS_KEY: "!10.0.0.1:/data,!10.0.0.2:/scratch"}
+        assert validate_pod(anns, _nfs_neg_spec(_NFS_VOL_A)).allowed is False
+        assert validate_pod(anns, _nfs_neg_spec(_NFS_VOL_B)).allowed is False
+        # A volume matching neither negation is allowed
+        vol_c = {"name": "nfs-c", "nfs": {"server": "10.0.0.3", "path": "/safe"}}
+        assert validate_pod(anns, _nfs_neg_spec(vol_c)).allowed is True
+
+    def test_multiple_volumes_one_blocked_by_negation(self):
+        """Two volumes; one matches negation → pod denied."""
+        anns = {**_ALWAYS_ANNOTATIONS, _NFS_KEY: "10.0.0.*:*,!10.0.0.1:/data"}
+        result = validate_pod(anns, _nfs_neg_spec(_NFS_VOL_A, _NFS_VOL_B))
+        assert result.allowed is False
+        assert "nfs-a" in result.message
+
+    def test_no_nfs_volumes_with_negation_ok(self):
+        """No NFS volumes → always ok, even with negated patterns."""
+        anns = {**_ALWAYS_ANNOTATIONS, _NFS_KEY: "!10.0.0.1:/data"}
+        spec = _pod(
+            pod_sc={"runAsNonRoot": True},
+            containers=[_container(sc={"runAsUser": 1000})],
+        )
+        assert validate_pod(anns, spec).allowed is True
+
+
+# ---------------------------------------------------------------------------
+# Toleration negation tests
+# ---------------------------------------------------------------------------
+
+
+class TestTolerationNegation:
+    """Tests for negated entries in toleration allowlist."""
+
+    def test_negated_toleration_blocks_matching(self):
+        anns = {**_TOL_ANNOTATIONS_BASE, _TOL_KEY: "!node-type=gpu:NoSchedule"}
+        tol = {"key": "node-type", "operator": "Equal", "value": "gpu", "effect": "NoSchedule"}
+        result = validate_pod(anns, _tol_spec(tol))
+        assert result.allowed is False
+        assert "negated" in result.message.lower()
+
+    def test_negated_toleration_allows_non_matching(self):
+        anns = {**_TOL_ANNOTATIONS_BASE, _TOL_KEY: "!node-type=gpu:NoSchedule"}
+        tol = {"key": "node-type", "operator": "Equal", "value": "cpu", "effect": "NoSchedule"}
+        result = validate_pod(anns, _tol_spec(tol))
+        assert result.allowed is True
+
+    def test_mixed_positive_and_negated_toleration(self):
+        """Positive allows node-type=cpu, negated blocks node-type=gpu."""
+        anns = {
+            **_TOL_ANNOTATIONS_BASE,
+            _TOL_KEY: "node-type=cpu:NoSchedule,!node-type=gpu:NoSchedule",
+        }
+        cpu_tol = {"key": "node-type", "operator": "Equal", "value": "cpu", "effect": "NoSchedule"}
+        gpu_tol = {"key": "node-type", "operator": "Equal", "value": "gpu", "effect": "NoSchedule"}
+        assert validate_pod(anns, _tol_spec(cpu_tol)).allowed is True
+        assert validate_pod(anns, _tol_spec(gpu_tol)).allowed is False
+
+    def test_negated_with_wildcard_value_blocks_exists_operator(self):
+        """!key=*:effect blocks Exists-operator tolerations too."""
+        anns = {**_TOL_ANNOTATIONS_BASE, _TOL_KEY: "!node-type=*:NoSchedule"}
+        tol = {"key": "node-type", "operator": "Exists", "effect": "NoSchedule"}
+        result = validate_pod(anns, _tol_spec(tol))
+        assert result.allowed is False
+
+    def test_negated_with_glob_key(self):
+        anns = {**_TOL_ANNOTATIONS_BASE, _TOL_KEY: "!gpu-*=*:*"}
+        tol = {"key": "gpu-partition", "operator": "Equal", "value": "a100", "effect": "NoSchedule"}
+        result = validate_pod(anns, _tol_spec(tol))
+        assert result.allowed is False
+
+    def test_negated_does_not_block_node_kubernetes_tolerations(self):
+        """node.kubernetes.io/* tolerations are always exempt, even from negation."""
+        anns = {**_TOL_ANNOTATIONS_BASE, _TOL_KEY: "!node.kubernetes.io/*=*:*"}
+        sys_tol = {"key": "node.kubernetes.io/not-ready", "operator": "Exists", "effect": "NoExecute"}
+        result = validate_pod(anns, _tol_spec(sys_tol))
+        assert result.allowed is True
+
+    def test_multiple_negated_entries(self):
+        anns = {
+            **_TOL_ANNOTATIONS_BASE,
+            _TOL_KEY: "!node-type=gpu:NoSchedule,!node-type=tpu:NoSchedule",
+        }
+        gpu = {"key": "node-type", "operator": "Equal", "value": "gpu", "effect": "NoSchedule"}
+        tpu = {"key": "node-type", "operator": "Equal", "value": "tpu", "effect": "NoSchedule"}
+        cpu = {"key": "node-type", "operator": "Equal", "value": "cpu", "effect": "NoSchedule"}
+        assert validate_pod(anns, _tol_spec(gpu)).allowed is False
+        assert validate_pod(anns, _tol_spec(tpu)).allowed is False
+        assert validate_pod(anns, _tol_spec(cpu)).allowed is True
+
+    def test_no_tolerations_with_negation_ok(self):
+        """No tolerations on pod → always ok, even with negated patterns."""
+        anns = {**_TOL_ANNOTATIONS_BASE, _TOL_KEY: "!node-type=gpu:NoSchedule"}
+        spec = _pod(
+            pod_sc={"runAsNonRoot": True},
+            containers=[_container(sc={"runAsUser": 1000})],
+        )
+        assert validate_pod(anns, spec).allowed is True
+
+    def test_positive_no_match_negation_no_match_still_rejected(self):
+        """Toleration not matching positive set and not blocked by negation → rejected."""
+        anns = {
+            **_TOL_ANNOTATIONS_BASE,
+            _TOL_KEY: "node-type=cpu:NoSchedule,!node-type=gpu:NoSchedule",
+        }
+        other = {"key": "zone", "operator": "Equal", "value": "us-east", "effect": "NoSchedule"}
+        result = validate_pod(anns, _tol_spec(other))
+        assert result.allowed is False
+        assert "not permitted" in result.message.lower()

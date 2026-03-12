@@ -12,7 +12,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from .base import Constraint, ConstraintParser, ConstraintSet
+from .base import Constraint, ConstraintParser, ConstraintSet, NegatedConstraint
 
 _TOKEN_RE = re.compile(r"^([^=]+)=(.+)$")
 
@@ -41,13 +41,16 @@ class NodeLabelConstraintParser(ConstraintParser):
         tokens = [t.strip() for t in annotation_value.split(",") if t.strip()]
         if not tokens:
             raise ValueError(f"Empty nodeLabel constraint annotation: {annotation_value!r}")
-        constraints = []
+        constraints: list[Constraint] = []
         for token in tokens:
-            m = _TOKEN_RE.match(token)
+            negated = token.startswith("!")
+            inner = token[1:].strip() if negated else token
+            m = _TOKEN_RE.match(inner)
             if not m:
                 raise ValueError(
                     f"Invalid nodeLabel constraint token {token!r}; "
-                    f"expected 'key=value' format"
+                    f"expected 'key=value' or '!key=value' format"
                 )
-            constraints.append(NodeLabelConstraint(m.group(1), m.group(2)))
+            c: Constraint = NodeLabelConstraint(m.group(1), m.group(2))
+            constraints.append(NegatedConstraint(c) if negated else c)
         return ConstraintSet(constraints)

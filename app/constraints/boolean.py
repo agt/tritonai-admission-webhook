@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .base import Constraint, ConstraintParser, ConstraintSet
+from .base import Constraint, ConstraintParser, ConstraintSet, NegatedConstraint
 
 
 class BooleanConstraint(Constraint):
@@ -30,14 +30,21 @@ class BooleanConstraint(Constraint):
 
 
 class BooleanConstraintParser(ConstraintParser):
-    """Parses a single boolean annotation value ("true" or "false")."""
+    """Parses a single boolean annotation value ("true", "false", "!true", "!false")."""
 
     def parse(self, annotation_value: str) -> ConstraintSet:
-        v = annotation_value.strip().lower()
+        v = annotation_value.strip()
+        negated = v.startswith("!")
+        if negated:
+            v = v[1:].strip()
+        v = v.lower()
         if v == "true":
-            return ConstraintSet([BooleanConstraint(True)])
-        if v == "false":
-            return ConstraintSet([BooleanConstraint(False)])
-        raise ValueError(
-            f"Invalid boolean constraint value {annotation_value!r}; expected 'true' or 'false'"
-        )
+            c: Constraint = BooleanConstraint(True)
+        elif v == "false":
+            c = BooleanConstraint(False)
+        else:
+            raise ValueError(
+                f"Invalid boolean constraint value {annotation_value!r}; "
+                f"expected 'true', 'false', '!true', or '!false'"
+            )
+        return ConstraintSet([NegatedConstraint(c) if negated else c])
