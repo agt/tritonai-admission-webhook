@@ -51,7 +51,7 @@ API Server → /mutate → fetch ns annotations → mutate_pod() → JSON Patch 
 API Server → /validate → fetch ns annotations → [workloads: mutate_pod_spec()] → validate_pod() → allow/deny
 ```
 
-Namespace security annotations are fetched from the Kubernetes API via `app/namespace_client.py` (`get_namespace_security_annotations()`), which returns only annotations with the `ANNOTATION_PREFIX/` prefix (default: `tritonai-admission-webhook/`). The K8s client is a synchronous call inside async handlers (acceptable given one call per webhook invocation). Auth tries in-cluster config first, then falls back to kubeconfig. Errors return an empty dict so the webhook continues (validator will deny rather than 500).
+Namespace security annotations are fetched from the Kubernetes API via `app/namespace_client.py` (`get_namespace_security_annotations()`), which returns only annotations with the `ANNOTATION_PREFIX/` prefix (default: `tritonai-admission-webhook/`). The K8s client is synchronous but wrapped in `asyncio.to_thread()` so it does not block the event loop. Auth tries in-cluster config first, then falls back to kubeconfig. Errors return an empty dict so the webhook continues (validator will deny rather than 500).
 
 ### Shared helpers (`app/pod_helpers.py`)
 
@@ -60,13 +60,17 @@ Reusable functions shared by mutator and validator: `_pod_sc()`, `_all_container
 ### Constraint system (`app/constraints/`)
 
 Extensible constraint abstraction:
-- `base.py`: `Constraint` (single token, `matches(value) -> bool`), `ConstraintSet` (OR-semantics over tokens), `ConstraintParser` (parses annotation string → `ConstraintSet`).
-- `numeric.py`: Handles `1000`, `2000-3000`, `>5000000`, `<500`, `>=1000`, `<=1000`.
-- `boolean.py`: Handles `true`/`false`.
-- `nodelabel.py`: Handles `key=value` pairs.
+- `base.py`: `Constraint` (single token, `matches(value) -> bool`), `NegatedConstraint` (inverts a constraint's match), `ConstraintSet` (positive tokens OR-ed, negated tokens AND-ed), `ConstraintParser` (parses annotation string → `ConstraintSet`).
+- `numeric.py`: Handles `1000`, `2000-3000`, `>5000000`, `<500`, `>=1000`, `<=1000`. All support `!` prefix.
+- `boolean.py`: Handles `true`/`false`/`!true`/`!false`.
+- `nodelabel.py`: Handles `key=value` and `!key=value` pairs.
 - `registry.py`: `CONSTRAINT_REGISTRY` dict mapping annotation keys to parser instances.
 
-To add a new ConstraintSet-based annotation: implement a `ConstraintParser`, register it in `registry.py`, and add a `FieldSpec` in `app/validator.py`'s `_FIELD_SPECS`.
+**Negation (`!` prefix)**: Any constraint token can be prefixed with `!`. Within a `ConstraintSet`, positive constraints use OR semantics (at least one must match) and negated constraints use AND semantics (all must be satisfied). When both are present, both conditions must hold. Example: `"1000,2000,!3000"` → `(value == 1000 OR value == 2000) AND value != 3000`.
+
+To add a new ConstraintSet-based annotation: implement a `ConstraintParser`, register it in `registry.py`, and add a `FieldSpec` in `app/validator.py`'s `_FIELD_SPECS`. When implementing the parser's token handler, check for a leading `!`, strip it, parse the remainder normally, and wrap in `NegatedConstraint(inner)` if negated.
+
+For non-ConstraintSet constraints (NFS volumes, tolerations), negation is handled directly in the validation functions: split tokens into positive and negated lists, check negated patterns first (none may match), then check positive patterns (at least one must match if any exist).
 
 ### Validator (`app/validator.py`)
 
@@ -84,7 +88,9 @@ Two layers of checks:
    - Pod: `hostNetwork`/`hostPID`/`hostIPC` absent or false; `securityContext.sysctls` absent or empty; `securityContext.runAsNonRoot` true (REQUIRED_SCALAR semantics); volume types restricted to allowed set; NFS volumes checked against `allowedNfsVolumes` annotation; `prohibitedVolumeTypes` annotation narrows the allowed set and also blocks env/envFrom sources.
    - Containers/initContainers/ephemeralContainers: `allowPrivilegeEscalation` absent or false; `privileged` absent or false; `capabilities.add` absent/empty or `["NET_BIND_SERVICE"]` only; `procMount` absent/`""`/`"Default"`.
 
-3. **Toleration allowlist** (`<POLICY_PREFIX>tolerations`): annotation-driven, handled outside `_FIELD_SPECS` like NFS volumes. Each pod toleration must match at least one `key=value:effect` entry (fnmatch globs supported in any field; `*` value also matches `Exists` operator). Annotation absent = no restriction.
+3. **Toleration allowlist** (`<POLICY_PREFIX>tolerations`): annotation-driven, handled outside `_FIELD_SPECS` like NFS volumes. Each pod toleration must match at least one positive `key=value:effect` entry (fnmatch globs supported in any field; `*` value also matches `Exists` operator) and must not match any negated (`!key=value:effect`) entry. Annotation absent = no restriction. `node.kubernetes.io/*` tolerations are always exempt from both positive and negated checks.
+
+   **NFS volumes** (`<POLICY_PREFIX>allowedNfsVolumes`): supports `!pattern` negation — none of the pod's NFS volumes may match a negated `server:/path` glob.
 
 ### Mutator (`app/mutator.py`)
 
