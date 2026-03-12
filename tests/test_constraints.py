@@ -1,6 +1,7 @@
 """Tests for the constraint parsing and matching system."""
 import pytest
 
+from app.constraints.base import NegatedConstraint
 from app.constraints.boolean import BooleanConstraintParser
 from app.constraints.nodelabel import NodeLabelConstraintParser
 from app.constraints.numeric import NumericConstraintParser
@@ -167,3 +168,126 @@ class TestNodeLabelConstraintParser:
         """Values containing '=' should parse correctly (split on first '=' only)."""
         cs = self.parser.parse("label=val=ue")
         assert cs.matches({"label": "val=ue"}) is True
+
+
+# ---------------------------------------------------------------------------
+# Negation tests
+# ---------------------------------------------------------------------------
+
+
+class TestNumericNegation:
+    parser = NumericConstraintParser()
+
+    def test_negated_exact(self):
+        cs = self.parser.parse("!1000")
+        assert cs.matches(1000) is False
+        assert cs.matches(999) is True
+        assert cs.matches(1001) is True
+
+    def test_negated_range(self):
+        cs = self.parser.parse("!2000-3000")
+        assert cs.matches(2500) is False
+        assert cs.matches(1999) is True
+        assert cs.matches(3001) is True
+
+    def test_negated_gt(self):
+        cs = self.parser.parse("!>100")
+        assert cs.matches(101) is False
+        assert cs.matches(100) is True
+        assert cs.matches(50) is True
+
+    def test_negated_lt(self):
+        cs = self.parser.parse("!<500")
+        assert cs.matches(499) is False
+        assert cs.matches(500) is True
+
+    def test_negated_gte(self):
+        cs = self.parser.parse("!>=1000")
+        assert cs.matches(1000) is False
+        assert cs.matches(999) is True
+
+    def test_negated_lte(self):
+        cs = self.parser.parse("!<=1000")
+        assert cs.matches(1000) is False
+        assert cs.matches(1001) is True
+
+    def test_mixed_positive_and_negated(self):
+        """'1000,2000,!3000' → (1000 OR 2000) AND NOT 3000."""
+        cs = self.parser.parse("1000,2000,!3000")
+        assert cs.matches(1000) is True
+        assert cs.matches(2000) is True
+        assert cs.matches(3000) is False
+        assert cs.matches(999) is False  # not in positive set
+
+    def test_multiple_negations(self):
+        """'!1000,!2000' → NOT 1000 AND NOT 2000."""
+        cs = self.parser.parse("!1000,!2000")
+        assert cs.matches(1000) is False
+        assert cs.matches(2000) is False
+        assert cs.matches(3000) is True
+        assert cs.matches(999) is True
+
+    def test_negation_produces_negated_constraint(self):
+        cs = self.parser.parse("!1000")
+        assert len(cs.constraints) == 1
+        assert isinstance(cs.constraints[0], NegatedConstraint)
+
+    def test_description_with_negation(self):
+        cs = self.parser.parse("1000,!2000")
+        desc = cs.description()
+        assert "exact(1000)" in desc
+        assert "NOT exact(2000)" in desc
+
+
+class TestBooleanNegation:
+    parser = BooleanConstraintParser()
+
+    def test_negated_true(self):
+        cs = self.parser.parse("!true")
+        assert cs.matches(True) is False
+        assert cs.matches(False) is True
+
+    def test_negated_false(self):
+        cs = self.parser.parse("!false")
+        assert cs.matches(False) is False
+        assert cs.matches(True) is True
+
+    def test_negated_true_case_insensitive(self):
+        cs = self.parser.parse("!True")
+        assert cs.matches(True) is False
+
+    def test_negated_string_matching(self):
+        cs = self.parser.parse("!true")
+        assert cs.matches("true") is False
+        assert cs.matches("false") is True
+
+    def test_invalid_negated_raises(self):
+        with pytest.raises(ValueError):
+            self.parser.parse("!yes")
+
+
+class TestNodeLabelNegation:
+    parser = NodeLabelConstraintParser()
+
+    def test_negated_label(self):
+        cs = self.parser.parse("!partition=a")
+        assert cs.matches({"partition": "a"}) is False
+        assert cs.matches({"partition": "b"}) is True
+        assert cs.matches({}) is True
+
+    def test_mixed_positive_and_negated(self):
+        """'partition=a,!partition=b' → (has partition=a) AND NOT (has partition=b)."""
+        cs = self.parser.parse("partition=a,!partition=b")
+        assert cs.matches({"partition": "a"}) is True
+        assert cs.matches({"partition": "b"}) is False
+        assert cs.matches({"partition": "c"}) is False  # not in positive set
+
+    def test_multiple_negated_labels(self):
+        cs = self.parser.parse("!partition=a,!partition=b")
+        assert cs.matches({"partition": "a"}) is False
+        assert cs.matches({"partition": "b"}) is False
+        assert cs.matches({"partition": "c"}) is True
+
+    def test_negated_missing_equals_raises(self):
+        with pytest.raises(ValueError):
+            self.parser.parse("!partitiona")

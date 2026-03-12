@@ -1409,3 +1409,109 @@ class TestValidateTolerations:
         ok_tol = {"key": "node-type", "operator": "Equal", "value": "its-ai", "effect": "NoSchedule"}
         result = validate_pod(anns, _tol_spec(sys_tol, ok_tol))
         assert result.allowed is True
+
+
+# ---------------------------------------------------------------------------
+# Negation operator integration tests
+# ---------------------------------------------------------------------------
+
+_P = "tritonai-admission-webhook/policy."
+
+
+class TestNegationIntegration:
+    """End-to-end validation tests for the ! negation operator."""
+
+    def test_required_scalar_negated_value_rejected(self):
+        """runAsUser=!1000 → uid 1000 is denied."""
+        anns = {f"{_P}runAsUser": "!1000"}
+        spec = _pod(
+            pod_sc={"runAsNonRoot": True, "runAsUser": 1000},
+            containers=[_container(sc={"allowPrivilegeEscalation": False})],
+        )
+        result = validate_pod(anns, spec)
+        assert result.allowed is False
+        assert "runAsUser" in result.message
+
+    def test_required_scalar_negated_value_allowed(self):
+        """runAsUser=!1000 → uid 2000 is allowed."""
+        anns = {f"{_P}runAsUser": "!1000"}
+        spec = _pod(
+            pod_sc={"runAsNonRoot": True, "runAsUser": 2000},
+            containers=[_container(sc={"allowPrivilegeEscalation": False})],
+        )
+        result = validate_pod(anns, spec)
+        assert result.allowed is True
+
+    def test_required_scalar_mixed_positive_and_negated(self):
+        """runAsUser=1000,2000,!3000 → 1000 ok, 3000 denied, 999 denied."""
+        anns = {f"{_P}runAsUser": "1000,2000,!3000"}
+        base_sc = {"runAsNonRoot": True}
+        containers = [_container(sc={"allowPrivilegeEscalation": False})]
+
+        # 1000 → allowed (positive match, not negated)
+        spec = _pod(pod_sc={**base_sc, "runAsUser": 1000}, containers=containers)
+        assert validate_pod(anns, spec).allowed is True
+
+        # 3000 → denied (negated)
+        spec = _pod(pod_sc={**base_sc, "runAsUser": 3000}, containers=containers)
+        assert validate_pod(anns, spec).allowed is False
+
+        # 999 → denied (no positive match)
+        spec = _pod(pod_sc={**base_sc, "runAsUser": 999}, containers=containers)
+        assert validate_pod(anns, spec).allowed is False
+
+    def test_optional_list_negated_blocks_entry(self):
+        """supplementalGroups=!5000 → a group list containing 5000 is denied."""
+        anns = {
+            f"{_P}runAsUser": "1000",
+            f"{_P}supplementalGroups": "!5000",
+        }
+        spec = _pod(
+            pod_sc={"runAsNonRoot": True, "runAsUser": 1000, "supplementalGroups": [5000]},
+            containers=[_container(sc={"allowPrivilegeEscalation": False})],
+        )
+        result = validate_pod(anns, spec)
+        assert result.allowed is False
+        assert "supplementalGroups" in result.message
+
+    def test_optional_list_negated_allows_other(self):
+        """supplementalGroups=!5000 → a group list without 5000 is allowed."""
+        anns = {
+            f"{_P}runAsUser": "1000",
+            f"{_P}supplementalGroups": "!5000",
+        }
+        spec = _pod(
+            pod_sc={"runAsNonRoot": True, "runAsUser": 1000, "supplementalGroups": [6000, 7000]},
+            containers=[_container(sc={"allowPrivilegeEscalation": False})],
+        )
+        result = validate_pod(anns, spec)
+        assert result.allowed is True
+
+    def test_node_label_negated_blocks_label(self):
+        """nodeLabel=!partition=gpu → nodeSelector with partition=gpu is denied."""
+        anns = {
+            f"{_P}runAsUser": "1000",
+            f"{_P}nodeLabel": "!partition=gpu",
+        }
+        spec = _pod(
+            pod_sc={"runAsNonRoot": True, "runAsUser": 1000},
+            containers=[_container(sc={"allowPrivilegeEscalation": False})],
+        )
+        spec["nodeSelector"] = {"partition": "gpu"}
+        result = validate_pod(anns, spec)
+        assert result.allowed is False
+        assert "nodeLabel" in result.message.lower() or "nodeSelector" in result.message
+
+    def test_node_label_negated_allows_other(self):
+        """nodeLabel=partition=cpu,!partition=gpu → partition=cpu is allowed."""
+        anns = {
+            f"{_P}runAsUser": "1000",
+            f"{_P}nodeLabel": "partition=cpu,!partition=gpu",
+        }
+        spec = _pod(
+            pod_sc={"runAsNonRoot": True, "runAsUser": 1000},
+            containers=[_container(sc={"allowPrivilegeEscalation": False})],
+        )
+        spec["nodeSelector"] = {"partition": "cpu"}
+        result = validate_pod(anns, spec)
+        assert result.allowed is True

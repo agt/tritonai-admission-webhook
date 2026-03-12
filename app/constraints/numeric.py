@@ -14,7 +14,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from .base import Constraint, ConstraintParser, ConstraintSet
+from .base import Constraint, ConstraintParser, ConstraintSet, NegatedConstraint
 
 # Regex patterns for each token type (evaluated in order)
 _RANGE_RE = re.compile(r"^(\d+)-(\d+)$")
@@ -111,23 +111,31 @@ class LessThanOrEqualConstraint(Constraint):
 
 
 def _parse_numeric_token(token: str) -> Constraint:
-    """Parse a single numeric token into the appropriate Constraint."""
+    """Parse a single numeric token into the appropriate Constraint.
+
+    A leading ``!`` negates the constraint.
+    """
     token = token.strip()
+    negated = token.startswith("!")
+    if negated:
+        token = token[1:].strip()
 
     if m := _RANGE_RE.match(token):
-        return RangeConstraint(int(m.group(1)), int(m.group(2)))
-    if m := _GTE_RE.match(token):
-        return GreaterThanOrEqualConstraint(int(m.group(1)))
-    if m := _LTE_RE.match(token):
-        return LessThanOrEqualConstraint(int(m.group(1)))
-    if m := _GT_RE.match(token):
-        return GreaterThanConstraint(int(m.group(1)))
-    if m := _LT_RE.match(token):
-        return LessThanConstraint(int(m.group(1)))
-    if m := _EXACT_RE.match(token):
-        return ExactNumericConstraint(int(m.group(1)))
+        c: Constraint = RangeConstraint(int(m.group(1)), int(m.group(2)))
+    elif m := _GTE_RE.match(token):
+        c = GreaterThanOrEqualConstraint(int(m.group(1)))
+    elif m := _LTE_RE.match(token):
+        c = LessThanOrEqualConstraint(int(m.group(1)))
+    elif m := _GT_RE.match(token):
+        c = GreaterThanConstraint(int(m.group(1)))
+    elif m := _LT_RE.match(token):
+        c = LessThanConstraint(int(m.group(1)))
+    elif m := _EXACT_RE.match(token):
+        c = ExactNumericConstraint(int(m.group(1)))
+    else:
+        raise ValueError(f"Cannot parse numeric constraint token: {token!r}")
 
-    raise ValueError(f"Cannot parse numeric constraint token: {token!r}")
+    return NegatedConstraint(c) if negated else c
 
 
 class NumericConstraintParser(ConstraintParser):
