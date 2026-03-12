@@ -250,3 +250,19 @@ Do not require ConfigMap entries to bear the configurable annotation prefix. Acc
 # Merge namespace annotations into ConfigMap policy result
 
 When a namespace has labels matching the ConfigMap index but also bears annotations, incorporate those annotations into the ConfigMap merge logic. Namespace annotations should override corresponding policies/defaults within ConfigMaps.
+
+# Sync-in-async analysis and asyncio.to_thread() implementation
+
+Add this sync-in-async analysis to a new file IMPLEMENTATION.md for future reference, then implement Approach 1. (Wrap the blocking `get_namespace_security_annotations()` K8s API call in `asyncio.to_thread()` so it does not block the event loop.)
+
+# Negation operator for constraint system
+
+Extend syntax to include a negation operator "!". If a constraint token is prefixed with an exclamation point, the pod's value must _not_ match that specific token, and in list/set contexts (volumes, nodeSelector, tolerations, etc.) _none_ of those entries may match the negated constraint.
+
+# Extend negation to NFS volumes and tolerations
+
+Extend negation logic to NFS volume and Toleration checks. For negated NFS server:/path patterns, _none_ of the Pod's NFS volumes may match the pattern. For negated Toleration key=value:effect, _none_ of the Pod's tolerations may match the pattern.
+
+# Update documentation for negation
+
+Update README.md to reflect the new negation functionality, and CLAUDE.md with guidance for negation handling for future constraints.
