@@ -178,10 +178,14 @@ _Validator_: If present,  **every element** in Pod's `supplementalGroups` list m
 _Mutator_: If default provided, and Pod does not specify nodeSelector(s), inject default list.
 
 _Validator_:   `pod.spec.nodeSelector` must contain at least one entry matching **any** of the
-  annotation's `key=value` tokens.  **Additionally**, ensures `pod.spec.nodeName` is **absent**.  _(Setting `nodeName` bypasses the scheduler and the `nodeSelector` check entirely, so it is never permitted when this annotation is present.)_
-
+  annotation's `key=value` tokens.  
 
 Tokens may be negated: `!key=value` means the pod's `nodeSelector` must **not** contain that pair.
+  
+**Additionally**, the Validator:
+- ensures `pod.spec.nodeName` is **absent**.  _(Setting `nodeName` bypasses the scheduler and the `nodeSelector` check entirely, so it is never permitted when this annotation is present.)_
+- ensures that negated tokens are not referenced within `nodeAffinity` clauses, as this could bypass the nodeSelector constraint.
+
 
 Example — namespace annotation `"rack=b,rack=c"` would:
 
