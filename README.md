@@ -1,15 +1,17 @@
 
 # TritonAI Pod Security Admission Webhook
 
-A FastAPI-based Kubernetes Pod admission webhook which offers fine-grained control over workloads' security configuration while minimizing modifications to published YAML or Helm files and without dependencies on external systems: defaults and constraints are established through shared policy sets (in configMaps) and per-namespace extensions/overrides (via namespace Annotations).
+A FastAPI-based Kubernetes Pod admission webhook which offers fine-grained control over workloads' security configuratios while requiring no modifications to published YAML or Helm files.   Defaults and constraints are established through a combination of shared policy sets (in configMaps) and per-namespace extensions/overrides (via namespace Annotations).
 
-- **Mutating webhook** (`/mutate`) — called first by the API server to inject optional defaults for fields later inspected by the Validator.
+- **Mutating webhook** (`/mutate`) — called first by the API server to inject optional pod defaults for fields later inspected by the Validator.
 
-- **Validating webhook** (`/validate`) — rejects pods which violate either namespace-specific policies or a list of hardcoded rules aligned to [Kubernetes Pod Security Standards](https://kubernetes.io/docs/concepts/security/pod-security-standards/).  For workload resources (Deployment, ReplicaSet, StatefulSet, DaemonSet, Job, and CronJob objects), namespace defaults are applied to the pod template spec via the mutator before validation so the validator sees the same (post-mutation) spec the API server would ultimately use.  The intent is to reject nonconforming workloads as early as possbile.
+- **Validating webhook** (`/validate`) — rejects pods which violate either namespace-specific policies or a list of hardcoded rules aligned to [Kubernetes Pod Security Standards](https://kubernetes.io/docs/concepts/security/pod-security-standards/).
 
-Beyond controlling Pod `securityContext` fields (`runAsUser`, etc.), defaults/constraints on `nodeSelectors` and `tolerations` enable Pods to be directed to specific node groups or excluded from them, and data security is enhanced through restrictions on permitted Volume types and allowable NFS servers/paths.
+For workload resources (Deployment, ReplicaSet, StatefulSet, DaemonSet, Job, and CronJob objects), namespace defaults are applied to the pod template spec via the mutator before validation so the validator sees the same (post-mutation) spec the API server would ultimately use.  The intent is to reject nonconforming workloads as early as possbile.
 
-These protections provide enhanced isolation for workloads executing within a mixed-tenant cluster.
+Beyond controlling Pod `securityContext` fields (`runAsUser`, etc.), defaults/constraints on `nodeSelectors` and `tolerations` enable Pods to be directed to specific node groups or excluded from them.  Data security is enhanced through restrictions on permitted Volume types and allowable NFS servers/paths, ensuring that pods can only mount approved volumes.
+
+Together these protections provide enhanced isolation for workloads executing within a mixed-tenant cluster.
 
 ### Example Namespace Annotations:
 ```yaml
@@ -38,11 +40,11 @@ metadata:
 
 ## ConfigMap-Based Policy Lookup
 
-As an alternative to annotating each namespace directly, policies can be stored in ConfigMaps within the webhook's own namespace and mapped to subject namespaces via their labels:
+In addition to annotating each namespace directly, policies can be stored in ConfigMaps within the webhook's own namespace and mapped to subject namespaces via their labels:
 
 1. The **policy index** ConfigMap (default name: `pod-security-policy-index`) in the webhook's namespace maps Namespace labels to **policy ConfigMaps**.  Each index key is a `label.value` string; each value is the name of a policy ConfigMap in the same namespace.
 
-2. **policy ConfigMaps** `data` entries use the same key/value format as namespace annotations. Keys may be written in bare form (prefix optional) or with the full annotation prefix — both are accepted:
+2. **policy ConfigMaps** `data` entries use the same key/value format as namespace annotations, minus the webhook prefix.
 
 ```yaml
 # Policy index
@@ -52,8 +54,8 @@ metadata:
   name: pod-security-policy-index
   namespace: tgptinf-system
 data:
-  "team/research": research-policy
-  "tier/gpu":      gpu-policy
+  "team.research": research-policy
+  "tier.gpu":      gpu-policy
 
 ---
 # A policy ConfigMap — bare keys (prefix omitted) are the recommended form
