@@ -270,5 +270,8 @@ Update README.md to reflect the new negation functionality, and CLAUDE.md with g
 # Change constraint merge behavior
 Instead of the current multi layer lookup, please propose changes to enforce all constraints (whether from configmap or annotation) via AND semantics.   each annotation would retain OR semantics internally for matching purposes, but all such policy statements must match for the pod to be approved.
 
-# Enforce allowPrivilegeEacalation=False
+# Enforce allowPrivilegeEscalation=False
 Adjust behavior for allowPrivilegeEscalation- mutator should set this to False on all containers if missing (if explicitly true let it remain, validator will catch it).  Then in the validator hardcoded rules, enforce that allowPrivilegeEscalation is always explicitly False.
+
+# Enforce runAsUser > 0
+Add a new hardcoded constraint, ensuring that neither pod nor any container specifies a runAsUser of 0. (this is in addition to the separate runAsNonRootUser check).
