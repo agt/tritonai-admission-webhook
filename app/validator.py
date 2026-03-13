@@ -250,9 +250,10 @@ def _validate_node_selector(
     1. pod.spec.nodeName must be absent — direct node binding bypasses nodeSelector.
     2. pod.spec.nodeSelector must satisfy every active constraint set.
     3. For negated tokens (!key=value), the label key must not appear in any
-       nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution
-       .nodeSelectorTerms[].matchExpressions[].key — nodeAffinity can otherwise
-       be used to route pods around the restriction.
+       nodeAffinity matchExpression key — in either
+       requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms or
+       preferredDuringSchedulingIgnoredDuringExecution[].preference — as
+       nodeAffinity can otherwise be used to route pods around the restriction.
     """
     errors: list[str] = []
 
@@ -273,20 +274,25 @@ def _validate_node_selector(
 
     prohibited = _nodeselectors_negated_keys(constraint_sets)
     if prohibited:
-        terms = (
-            (pod_spec.get("affinity") or {})
-            .get("nodeAffinity", {})
-            .get("requiredDuringSchedulingIgnoredDuringExecution", {})
-            .get("nodeSelectorTerms") or []
-        )
-        for term in terms:
-            for expr in term.get("matchExpressions") or []:
+        node_affinity = (pod_spec.get("affinity") or {}).get("nodeAffinity") or {}
+
+        def _check_exprs(exprs: list[dict[str, Any]]) -> None:
+            for expr in exprs:
                 key = expr.get("key")
                 if key in prohibited:
                     errors.append(
                         f"Pod nodeAffinity references key {key!r} which is "
                         f"prohibited by the nodeSelectors constraint"
                     )
+
+        for term in (
+            (node_affinity.get("requiredDuringSchedulingIgnoredDuringExecution") or {})
+            .get("nodeSelectorTerms") or []
+        ):
+            _check_exprs(term.get("matchExpressions") or [])
+
+        for preferred in node_affinity.get("preferredDuringSchedulingIgnoredDuringExecution") or []:
+            _check_exprs((preferred.get("preference") or {}).get("matchExpressions") or [])
 
     return errors
 
