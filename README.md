@@ -9,7 +9,7 @@ A FastAPI-based Kubernetes Pod admission webhook which offers fine-grained contr
 
 For workload resources (Deployment, ReplicaSet, StatefulSet, DaemonSet, Job, and CronJob objects), namespace defaults are applied to the pod template spec via the mutator before validation so the validator sees the same (post-mutation) spec the API server would ultimately use.  The intent is to reject nonconforming workloads as early as possbile.
 
-Beyond controlling Pod `securityContext` fields (`runAsUser`, etc.), defaults/constraints on `nodeSelectors` and `tolerations` enable Pods to be directed to specific node groups or excluded from them.  Data security is enhanced through restrictions on permitted Volume types and allowable NFS servers/paths, ensuring that pods can only mount approved volumes.
+Beyond controlling Pod `securityContext` fields (`runAsUser`, etc.), defaults/constraints on `nodeSelectors` and `tolerations` enable Pods to be confined to specific node groups or excluded from them.  Data security is enhanced through restrictions on permitted Volume types and allowable NFS servers/paths, ensuring that pods can only mount approved volumes.
 
 Together these protections provide enhanced isolation for workloads executing within a mixed-tenant cluster.
 
