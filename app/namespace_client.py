@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 import time
 from functools import lru_cache
 
@@ -73,6 +74,11 @@ def _get_core_v1_api() -> client.CoreV1Api:
 # TTL-cached ConfigMap helpers
 # ---------------------------------------------------------------------------
 
+# Lock protecting all cache state below (_index_data, _index_expires,
+# _policy_cache).  Multiple asyncio.to_thread() calls can run concurrently
+# in the thread pool; the lock prevents TOCTOU races on cache reads/writes.
+_cache_lock = threading.Lock()
+
 # Index cache: maps "label.value" → policy ConfigMap name.
 _index_data: dict[str, str] | None = None
 _index_expires: float = 0.0
@@ -96,41 +102,42 @@ def _get_index() -> dict[str, str]:
     if there is no prior data, an empty dict is returned.
     """
     global _index_data, _index_expires
-    now = time.monotonic()
-    if _index_data is not None and now < _index_expires:
-        return _index_data
+    with _cache_lock:
+        now = time.monotonic()
+        if _index_data is not None and now < _index_expires:
+            return _index_data
 
-    try:
-        api = _get_core_v1_api()
-        cm = api.read_namespaced_config_map(POLICY_INDEX_CONFIGMAP, WEBHOOK_NAMESPACE)
-        data: dict[str, str] = cm.data or {}
-        logger.debug(
-            "Loaded policy index ConfigMap %r/%r (%d entries)",
-            WEBHOOK_NAMESPACE, POLICY_INDEX_CONFIGMAP, len(data),
-        )
-    except ApiException as exc:
-        if exc.status == 404:
+        try:
+            api = _get_core_v1_api()
+            cm = api.read_namespaced_config_map(POLICY_INDEX_CONFIGMAP, WEBHOOK_NAMESPACE)
+            data: dict[str, str] = cm.data or {}
             logger.debug(
-                "Policy index ConfigMap %r/%r not found; no label mappings active.",
+                "Loaded policy index ConfigMap %r/%r (%d entries)",
+                WEBHOOK_NAMESPACE, POLICY_INDEX_CONFIGMAP, len(data),
+            )
+        except ApiException as exc:
+            if exc.status == 404:
+                logger.debug(
+                    "Policy index ConfigMap %r/%r not found; no label mappings active.",
+                    WEBHOOK_NAMESPACE, POLICY_INDEX_CONFIGMAP,
+                )
+                data = {}
+            else:
+                logger.warning(
+                    "Failed to fetch policy index ConfigMap %r/%r: %s %s",
+                    WEBHOOK_NAMESPACE, POLICY_INDEX_CONFIGMAP, exc.status, exc.reason,
+                )
+                data = _index_data or {}
+        except Exception:
+            logger.exception(
+                "Unexpected error fetching policy index ConfigMap %r/%r",
                 WEBHOOK_NAMESPACE, POLICY_INDEX_CONFIGMAP,
             )
-            data = {}
-        else:
-            logger.warning(
-                "Failed to fetch policy index ConfigMap %r/%r: %s %s",
-                WEBHOOK_NAMESPACE, POLICY_INDEX_CONFIGMAP, exc.status, exc.reason,
-            )
             data = _index_data or {}
-    except Exception:
-        logger.exception(
-            "Unexpected error fetching policy index ConfigMap %r/%r",
-            WEBHOOK_NAMESPACE, POLICY_INDEX_CONFIGMAP,
-        )
-        data = _index_data or {}
 
-    _index_data = data
-    _index_expires = now + POLICY_CACHE_TTL
-    return data
+        _index_data = data
+        _index_expires = now + POLICY_CACHE_TTL
+        return data
 
 
 def _normalise_cm_key(key: str) -> str:
@@ -168,37 +175,38 @@ def _get_policy_cm(name: str) -> dict[str, str]:
     On fetch errors the last cached value is reused; if none exists, an
     empty dict is returned so the webhook degrades gracefully.
     """
-    now = time.monotonic()
-    cached = _policy_cache.get(name)
-    if cached is not None:
-        data, expires = cached
-        if now < expires:
-            return data
-        stale_data = data
-    else:
-        stale_data = {}
+    with _cache_lock:
+        now = time.monotonic()
+        cached = _policy_cache.get(name)
+        if cached is not None:
+            data, expires = cached
+            if now < expires:
+                return data
+            stale_data = data
+        else:
+            stale_data = {}
 
-    try:
-        api = _get_core_v1_api()
-        cm = api.read_namespaced_config_map(name, WEBHOOK_NAMESPACE)
-        data = {_normalise_cm_key(k): v for k, v in (cm.data or {}).items()}
-        logger.debug(
-            "Loaded policy ConfigMap %r/%r (%d keys)", WEBHOOK_NAMESPACE, name, len(data)
-        )
-    except ApiException as exc:
-        logger.warning(
-            "Failed to fetch policy ConfigMap %r/%r: %s %s",
-            WEBHOOK_NAMESPACE, name, exc.status, exc.reason,
-        )
-        data = stale_data
-    except Exception:
-        logger.exception(
-            "Unexpected error fetching policy ConfigMap %r/%r", WEBHOOK_NAMESPACE, name
-        )
-        data = stale_data
+        try:
+            api = _get_core_v1_api()
+            cm = api.read_namespaced_config_map(name, WEBHOOK_NAMESPACE)
+            data = {_normalise_cm_key(k): v for k, v in (cm.data or {}).items()}
+            logger.debug(
+                "Loaded policy ConfigMap %r/%r (%d keys)", WEBHOOK_NAMESPACE, name, len(data)
+            )
+        except ApiException as exc:
+            logger.warning(
+                "Failed to fetch policy ConfigMap %r/%r: %s %s",
+                WEBHOOK_NAMESPACE, name, exc.status, exc.reason,
+            )
+            data = stale_data
+        except Exception:
+            logger.exception(
+                "Unexpected error fetching policy ConfigMap %r/%r", WEBHOOK_NAMESPACE, name
+            )
+            data = stale_data
 
-    _policy_cache[name] = (data, now + POLICY_CACHE_TTL)
-    return data
+        _policy_cache[name] = (data, now + POLICY_CACHE_TTL)
+        return data
 
 
 def _resolve_configmap_policy(ns_labels: dict[str, str]) -> list[dict[str, str]]:
